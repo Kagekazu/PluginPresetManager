@@ -8,7 +8,6 @@ A plugin preset manager for Dalamud with always-on plugin support.
 - **Always-On Plugins**: Mark essential plugins that should always be enabled regardless of preset
 - **Default Preset**: Auto-apply a preset when you log in
 - **Preview Changes**: See exactly what will change before applying a preset
-- **Plugin Discovery**: View all installed plugins with search and filtering
 
 ## Commands
 
