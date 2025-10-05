@@ -57,7 +57,8 @@ public class PresetManager
             log.Info("Applying always-on only mode");
 
             var installedPlugins = pluginInterface.InstalledPlugins
-                .ToDictionary(p => p.InternalName, p => p);
+                .GroupBy(p => p.InternalName)
+                .ToDictionary(g => g.Key, g => g.First());
 
             var effectiveEnabledSet = new HashSet<string>(alwaysOnPlugins);
 
@@ -166,7 +167,8 @@ public class PresetManager
             }
 
             var installedPlugins = pluginInterface.InstalledPlugins
-                .ToDictionary(p => p.InternalName, p => p);
+                .GroupBy(p => p.InternalName)
+                .ToDictionary(g => g.Key, g => g.First());
 
             var effectiveEnabledSet = new HashSet<string>(preset.EnabledPlugins);
 
@@ -351,7 +353,8 @@ public class PresetManager
     {
         var preview = new PresetPreview();
         var installedPlugins = pluginInterface.InstalledPlugins
-            .ToDictionary(p => p.InternalName, p => p);
+            .GroupBy(p => p.InternalName)
+            .ToDictionary(g => g.Key, g => g.First());
 
         var effectiveEnabledSet = new HashSet<string>(preset.EnabledPlugins);
         effectiveEnabledSet.UnionWith(alwaysOnPlugins);
@@ -426,7 +429,8 @@ public class PresetManager
     public List<string> GetMissingPlugins(Preset preset)
     {
         var installedPlugins = pluginInterface.InstalledPlugins
-            .ToDictionary(p => p.InternalName);
+            .GroupBy(p => p.InternalName)
+            .ToDictionary(g => g.Key, g => g.First());
 
         return preset.EnabledPlugins
             .Where(pluginName => !installedPlugins.ContainsKey(pluginName))

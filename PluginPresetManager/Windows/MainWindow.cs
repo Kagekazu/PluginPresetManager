@@ -32,27 +32,27 @@ public class MainWindow : Window, IDisposable
 
     public override void Draw()
     {
-        if (ImGui.BeginTabBar("PresetTabs"))
+        if (ImGui.BeginTabBar("PresetTabs###main_tabs"))
         {
-            if (ImGui.BeginTabItem("Presets"))
+            if (ImGui.BeginTabItem("Presets###tab_presets"))
             {
                 DrawPresetsTab();
                 ImGui.EndTabItem();
             }
 
-            if (ImGui.BeginTabItem("Always-On Plugins"))
+            if (ImGui.BeginTabItem("Always-On Plugins###tab_always"))
             {
                 DrawAlwaysOnTab();
                 ImGui.EndTabItem();
             }
 
-            if (ImGui.BeginTabItem("All Plugins"))
+            if (ImGui.BeginTabItem("All Plugins###tab_all"))
             {
                 DrawAllPluginsTab();
                 ImGui.EndTabItem();
             }
 
-            if (ImGui.BeginTabItem("Help"))
+            if (ImGui.BeginTabItem("Help###tab_help"))
             {
                 DrawHelpTab();
                 ImGui.EndTabItem();
@@ -242,7 +242,7 @@ public class MainWindow : Window, IDisposable
 
         if (ImGui.Button("Delete", new Vector2(70, 0)))
         {
-            ImGui.OpenPopup("DeleteConfirm");
+            ImGui.OpenPopup($"DeleteConfirm###{preset.Id}");
         }
 
         if (ImGui.Button("Add Enabled Plugins", new Vector2(150, 0)))
@@ -270,7 +270,7 @@ public class MainWindow : Window, IDisposable
         }
 
         var trueValue = true;
-        if (ImGui.BeginPopupModal("DeleteConfirm", ref trueValue, ImGuiWindowFlags.AlwaysAutoResize))
+        if (ImGui.BeginPopupModal($"DeleteConfirm###{preset.Id}", ref trueValue, ImGuiWindowFlags.AlwaysAutoResize))
         {
             ImGui.Text($"Are you sure you want to delete '{preset.Name}'?");
             ImGui.Spacing();
@@ -298,10 +298,10 @@ public class MainWindow : Window, IDisposable
         ImGui.SameLine();
         if (ImGui.SmallButton("Add"))
         {
-            ImGui.OpenPopup("AddPluginToPreset");
+            ImGui.OpenPopup($"AddPluginToPreset###{preset.Id}");
         }
 
-        if (ImGui.BeginPopup("AddPluginToPreset"))
+        if (ImGui.BeginPopup($"AddPluginToPreset###{preset.Id}"))
         {
             ImGui.TextUnformatted("Add plugins:");
             ImGui.InputTextWithHint("##AddPluginSearch", "Search...", ref searchFilter, 100);
@@ -351,7 +351,9 @@ public class MainWindow : Window, IDisposable
 
         if (ImGui.BeginChild("PresetPlugins", new Vector2(0, 0), true))
         {
-            var installedPlugins = Plugin.PluginInterface.InstalledPlugins.ToDictionary(p => p.InternalName);
+            var installedPlugins = Plugin.PluginInterface.InstalledPlugins
+                .GroupBy(p => p.InternalName)
+                .ToDictionary(g => g.Key, g => g.First());
             var alwaysOnPlugins = presetManager.GetAlwaysOnPlugins();
 
             var alwaysOnInPreset = alwaysOnPlugins.Where(p => installedPlugins.ContainsKey(p)).ToList();
@@ -428,7 +430,9 @@ public class MainWindow : Window, IDisposable
 
         if (ImGui.BeginChild("AlwaysOnList", new Vector2(0, -35), true))
         {
-            var installedPlugins = Plugin.PluginInterface.InstalledPlugins.ToDictionary(p => p.InternalName);
+            var installedPlugins = Plugin.PluginInterface.InstalledPlugins
+                .GroupBy(p => p.InternalName)
+                .ToDictionary(g => g.Key, g => g.First());
 
             foreach (var pluginName in presetManager.GetAlwaysOnPlugins().ToList())
             {
