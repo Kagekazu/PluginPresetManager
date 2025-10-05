@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
@@ -8,6 +9,7 @@ public class AlwaysOnTab
 {
 	private readonly Plugin plugin;
 	private readonly PresetManager presetManager;
+	private string searchFilter = string.Empty;
 
 	public AlwaysOnTab(Plugin plugin, PresetManager presetManager)
 	{
@@ -77,24 +79,48 @@ public class AlwaysOnTab
 
 		if (ImGui.Button("Add Plugin to Always-On", new Vector2(-1, 0)))
 		{
+			searchFilter = string.Empty;
 			ImGui.OpenPopup("SelectPluginAlwaysOn");
 		}
 
 		if (ImGui.BeginPopup("SelectPluginAlwaysOn"))
 		{
 			ImGui.TextUnformatted("Select plugin to add:");
-			ImGui.Separator();
+			ImGui.InputTextWithHint("##AlwaysOnSearch", "Search...", ref searchFilter, 100);
 
-			foreach (var pi in Plugin.PluginInterface.InstalledPlugins.OrderBy(p => p.Name))
+			if (ImGui.BeginChild("AlwaysOnPluginList", new Vector2(400, 300)))
 			{
-				if (presetManager.GetAlwaysOnPlugins().Contains(pi.InternalName))
-					continue;
-
-				if (ImGui.Selectable(pi.Name))
+				foreach (var pi in Plugin.PluginInterface.InstalledPlugins.OrderBy(p => p.Name))
 				{
-					presetManager.AddAlwaysOnPlugin(pi.InternalName);
-					ImGui.CloseCurrentPopup();
+					if (presetManager.GetAlwaysOnPlugins().Contains(pi.InternalName))
+						continue;
+
+					if (!string.IsNullOrEmpty(searchFilter) &&
+						!pi.Name.Contains(searchFilter, StringComparison.OrdinalIgnoreCase) &&
+						!pi.InternalName.Contains(searchFilter, StringComparison.OrdinalIgnoreCase))
+					{
+						continue;
+					}
+
+					if (ImGui.Selectable(pi.Name))
+					{
+						presetManager.AddAlwaysOnPlugin(pi.InternalName);
+						ImGui.CloseCurrentPopup();
+					}
+
+					if (pi.IsDev)
+					{
+						ImGui.SameLine();
+						ImGui.TextColored(new Vector4(1, 0, 1, 1), "[DEV]");
+					}
+					if (pi.IsThirdParty)
+					{
+						ImGui.SameLine();
+						ImGui.TextColored(new Vector4(1, 1, 0, 1), "[3rd]");
+					}
 				}
+
+				ImGui.EndChild();
 			}
 
 			ImGui.EndPopup();

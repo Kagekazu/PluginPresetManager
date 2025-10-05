@@ -15,6 +15,7 @@ public class PresetsTab
 	private string newPresetName = string.Empty;
 	private Preset? selectedPreset;
 	private string searchFilter = string.Empty;
+	private bool openAddPluginPopup = false;
 
 	public PresetsTab(Plugin plugin, Configuration config, PresetManager presetManager)
 	{
@@ -125,6 +126,62 @@ public class PresetsTab
 			}
 
 			ImGui.EndChild();
+		}
+
+		if (selectedPreset != null && openAddPluginPopup)
+		{
+			ImGui.OpenPopup($"AddPluginToPreset###{selectedPreset.Id}");
+			openAddPluginPopup = false;
+		}
+
+		if (selectedPreset != null && ImGui.BeginPopup($"AddPluginToPreset###{selectedPreset.Id}"))
+		{
+			ImGui.TextUnformatted("Add plugins:");
+			ImGui.InputTextWithHint("##AddPluginSearch", "Search...", ref searchFilter, 100);
+
+			if (ImGui.BeginChild("AddPluginList", new Vector2(400, 300)))
+			{
+				var installedPlugins = Plugin.PluginInterface.InstalledPlugins
+					.OrderBy(p => p.Name)
+					.ToList();
+
+				foreach (var plugin in installedPlugins)
+				{
+					if (selectedPreset.EnabledPlugins.Contains(plugin.InternalName))
+						continue;
+
+					if (presetManager.GetAlwaysOnPlugins().Contains(plugin.InternalName))
+						continue;
+
+					if (!string.IsNullOrEmpty(searchFilter) &&
+						!plugin.Name.Contains(searchFilter, StringComparison.OrdinalIgnoreCase) &&
+						!plugin.InternalName.Contains(searchFilter, StringComparison.OrdinalIgnoreCase))
+					{
+						continue;
+					}
+
+					if (ImGui.Selectable($"{plugin.Name}##{plugin.InternalName}"))
+					{
+						selectedPreset.EnabledPlugins.Add(plugin.InternalName);
+						presetManager.UpdatePreset(selectedPreset);
+					}
+
+					if (plugin.IsDev)
+					{
+						ImGui.SameLine();
+						ImGui.TextColored(new Vector4(1, 0, 1, 1), "[DEV]");
+					}
+					if (plugin.IsThirdParty)
+					{
+						ImGui.SameLine();
+						ImGui.TextColored(new Vector4(1, 1, 0, 1), "[3rd]");
+					}
+				}
+
+				ImGui.EndChild();
+			}
+
+			ImGui.EndPopup();
 		}
 	}
 
@@ -263,60 +320,17 @@ public class PresetsTab
 
 		ImGui.Separator();
 
-		ImGui.Text($"Plugins: {preset.EnabledPlugins.Count}");
+		if (ImGui.Button($"Add Plugin##AddPlugin{preset.Id}", new Vector2(100, 0)))
+		{
+			searchFilter = string.Empty;
+			openAddPluginPopup = true;
+		}
+		if (ImGui.IsItemHovered())
+		{
+			ImGui.SetTooltip("Add individual plugins to this preset");
+		}
 		ImGui.SameLine();
-		if (ImGui.SmallButton("Add"))
-		{
-			ImGui.OpenPopup($"AddPluginToPreset###{preset.Id}");
-		}
-
-		if (ImGui.BeginPopup($"AddPluginToPreset###{preset.Id}"))
-		{
-			ImGui.TextUnformatted("Add plugins:");
-			ImGui.InputTextWithHint("##AddPluginSearch", "Search...", ref searchFilter, 100);
-
-			if (ImGui.BeginChild("AddPluginList", new Vector2(400, 300)))
-			{
-				var installedPlugins = Plugin.PluginInterface.InstalledPlugins
-					.OrderBy(p => p.Name)
-					.ToList();
-
-				foreach (var plugin in installedPlugins)
-				{
-					if (preset.EnabledPlugins.Contains(plugin.InternalName))
-						continue;
-
-					if (presetManager.GetAlwaysOnPlugins().Contains(plugin.InternalName))
-						continue;
-
-					if (!string.IsNullOrEmpty(searchFilter) &&
-						!plugin.Name.Contains(searchFilter, StringComparison.OrdinalIgnoreCase) &&
-						!plugin.InternalName.Contains(searchFilter, StringComparison.OrdinalIgnoreCase))
-					{
-						continue;
-					}
-
-					if (ImGui.Selectable($"{plugin.Name}##{plugin.InternalName}"))
-					{
-						preset.EnabledPlugins.Add(plugin.InternalName);
-						presetManager.UpdatePreset(preset);
-					}
-
-					if (ImGui.IsItemHovered())
-					{
-						ImGui.BeginTooltip();
-						ImGui.TextUnformatted($"Version: {plugin.Version}");
-						if (plugin.IsDev) ImGui.TextColored(new Vector4(1, 0, 1, 1), "[DEV Plugin]");
-						if (plugin.IsThirdParty) ImGui.TextColored(new Vector4(1, 1, 0, 1), "[Third-Party]");
-						ImGui.EndTooltip();
-					}
-				}
-
-				ImGui.EndChild();
-			}
-
-			ImGui.EndPopup();
-		}
+		ImGui.Text($"Plugins: {preset.EnabledPlugins.Count}");
 
 		if (ImGui.BeginChild("PresetPlugins", new Vector2(0, 0), true))
 		{
