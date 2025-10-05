@@ -25,7 +25,6 @@ public sealed class Plugin : IDalamudPlugin
 
     public readonly WindowSystem WindowSystem = new("PluginPresetManager");
     private MainWindow MainWindow { get; init; }
-    private ConfigWindow ConfigWindow { get; init; }
 
     public Plugin()
     {
@@ -63,10 +62,8 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         MainWindow = new MainWindow(this);
-        ConfigWindow = new ConfigWindow(this);
 
         WindowSystem.AddWindow(MainWindow);
-        WindowSystem.AddWindow(ConfigWindow);
 
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
@@ -79,7 +76,7 @@ public sealed class Plugin : IDalamudPlugin
         });
 
         PluginInterface.UiBuilder.Draw += WindowSystem.Draw;
-        PluginInterface.UiBuilder.OpenConfigUi += ToggleConfigUi;
+        PluginInterface.UiBuilder.OpenConfigUi += OpenConfigUi;
         PluginInterface.UiBuilder.OpenMainUi += ToggleMainUi;
 
         Log.Info($"Plugin Preset Manager loaded successfully");
@@ -88,12 +85,11 @@ public sealed class Plugin : IDalamudPlugin
     public void Dispose()
     {
         PluginInterface.UiBuilder.Draw -= WindowSystem.Draw;
-        PluginInterface.UiBuilder.OpenConfigUi -= ToggleConfigUi;
+        PluginInterface.UiBuilder.OpenConfigUi -= OpenConfigUi;
         PluginInterface.UiBuilder.OpenMainUi -= ToggleMainUi;
 
         WindowSystem.RemoveAllWindows();
         MainWindow.Dispose();
-        ConfigWindow.Dispose();
 
         CommandManager.RemoveHandler(CommandName);
         CommandManager.RemoveHandler(CommandNameShort);
@@ -156,6 +152,10 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
-    public void ToggleConfigUi() => ConfigWindow.Toggle();
     public void ToggleMainUi() => MainWindow.Toggle();
+
+    private void OpenConfigUi()
+    {
+        MainWindow.FocusSettingsTab();
+    }
 }
