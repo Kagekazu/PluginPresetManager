@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
+using Dalamud.Interface.ImGuiNotification;
 using PluginPresetManager.Models;
 
 namespace PluginPresetManager;
@@ -13,6 +14,7 @@ public class PresetManager
     private readonly IDalamudPluginInterface pluginInterface;
     private readonly ICommandManager commandManager;
     private readonly IChatGui chatGui;
+    private readonly INotificationManager notificationManager;
     private readonly IPluginLog log;
     private readonly Configuration config;
     private readonly PresetStorage storage;
@@ -24,6 +26,7 @@ public class PresetManager
         IDalamudPluginInterface pluginInterface,
         ICommandManager commandManager,
         IChatGui chatGui,
+        INotificationManager notificationManager,
         IPluginLog log,
         Configuration config,
         PresetStorage storage)
@@ -31,6 +34,7 @@ public class PresetManager
         this.pluginInterface = pluginInterface;
         this.commandManager = commandManager;
         this.chatGui = chatGui;
+        this.notificationManager = notificationManager;
         this.log = log;
         this.config = config;
         this.storage = storage;
@@ -44,6 +48,29 @@ public class PresetManager
         alwaysOnPlugins = storage.LoadAlwaysOnPlugins();
         log.Info($"Loaded {presets.Count} presets and {alwaysOnPlugins.Count} always-on plugins");
     }
+    
+    private void ShowNotification(string message, bool isError = false)
+    {
+        switch (config.NotificationMode)
+        {
+            case NotificationMode.Toast:
+                notificationManager.AddNotification(new Notification
+                {
+                    Content = message,
+                    Type = isError ? NotificationType.Error : NotificationType.Success,
+                    Title = "Preset Manager"
+                });
+                break;
+            case NotificationMode.Chat:
+                if (isError)
+                    chatGui.PrintError($"[Preset] {message}");
+                else
+                    chatGui.Print($"[Preset] {message}");
+                break;
+            case NotificationMode.None:
+                break;
+        }
+    }
 
     public List<Preset> GetAllPresets() => presets;
 
@@ -54,7 +81,7 @@ public class PresetManager
         try
         {
             progress?.Report("Applying always-on plugins only...");
-            log.Info("Applying always-on only mode");
+            log.Info("Starting always-on only mode application");
 
             var installedPlugins = pluginInterface.InstalledPlugins
                 .GroupBy(p => p.InternalName)
@@ -71,12 +98,13 @@ public class PresetManager
                             && !installedPlugins[name].IsLoaded)
                 .ToList();
 
+            var failedDisable = new List<string>();
+            var failedEnable = new List<string>();
 
             progress?.Report($"Disabling {toDisable.Count} plugins...");
             foreach (var plugin in toDisable)
             {
-                log.Info($"Disabling: {plugin.Name} (InternalName: {plugin.InternalName})");
-                var cmd = $"/xldisableplugin \"{plugin.InternalName}\"";
+                var cmd = $"/xldisableplugin \"{plugin.Name}\"";
                 commandManager.ProcessCommand(cmd);
 
                 var maxWaitMs = 5000;
@@ -84,8 +112,8 @@ public class PresetManager
                 var isDisabled = false;
                 while (!isDisabled && waitedMs < maxWaitMs)
                 {
-                    await Task.Delay(100);
-                    waitedMs += 100;
+                    await Task.Delay(config.PluginStateCheckInterval);
+                    waitedMs += config.PluginStateCheckInterval;
 
                     var currentPlugin = pluginInterface.InstalledPlugins
                         .FirstOrDefault(p => p.InternalName == plugin.InternalName);
@@ -96,6 +124,12 @@ public class PresetManager
                     }
                 }
 
+                if (!isDisabled)
+                {
+                    failedDisable.Add(plugin.Name);
+                    log.Warning($"Plugin {plugin.Name} did not disable within timeout (waited {waitedMs}ms)");
+                }
+
                 await Task.Delay(config.DelayBetweenCommands);
             }
 
@@ -103,8 +137,7 @@ public class PresetManager
             foreach (var pluginName in toEnable)
             {
                 var plugin = installedPlugins[pluginName];
-                log.Info($"Enabling: {plugin.Name} (InternalName: {plugin.InternalName})");
-                var cmd = $"/xlenableplugin \"{plugin.InternalName}\"";
+                var cmd = $"/xlenableplugin \"{plugin.Name}\"";
                 commandManager.ProcessCommand(cmd);
 
                 var maxWaitMs = 5000;
@@ -112,8 +145,8 @@ public class PresetManager
                 var isEnabled = false;
                 while (!isEnabled && waitedMs < maxWaitMs)
                 {
-                    await Task.Delay(100);
-                    waitedMs += 100;
+                    await Task.Delay(config.PluginStateCheckInterval);
+                    waitedMs += config.PluginStateCheckInterval;
 
                     var currentPlugin = pluginInterface.InstalledPlugins
                         .FirstOrDefault(p => p.InternalName == pluginName);
@@ -124,6 +157,12 @@ public class PresetManager
                     }
                 }
 
+                if (!isEnabled)
+                {
+                    failedEnable.Add(plugin.Name);
+                    log.Warning($"Plugin {plugin.Name} did not enable within timeout (waited {waitedMs}ms)");
+                }
+
                 await Task.Delay(config.DelayBetweenCommands);
             }
 
@@ -131,25 +170,48 @@ public class PresetManager
             pluginInterface.SavePluginConfig(config);
 
             progress?.Report("Always-on only mode applied!");
-
-            if (config.ShowNotifications)
+            
+            var successfulDisable = toDisable.Count - failedDisable.Count;
+            var successfulEnable = toEnable.Count - failedEnable.Count;
+            
+            if (failedDisable.Count > 0 || failedEnable.Count > 0)
             {
-                if (config.VerboseNotifications)
+                var notificationMessage = $"Applied always-on mode with failures:\n" +
+                    $"Enabled: {successfulEnable}/{toEnable.Count}, Disabled: {successfulDisable}/{toDisable.Count}";
+                    
+                if (failedEnable.Count > 0)
                 {
-                    chatGui.Print($"[Preset] Applied always-on only mode ({alwaysOnPlugins.Count} plugins enabled, {toDisable.Count} disabled)");
+                    notificationMessage += $"\nFailed to enable: {string.Join(", ", failedEnable.Take(3))}";
+                    if (failedEnable.Count > 3) notificationMessage += $" and {failedEnable.Count - 3} more";
                 }
-                else
+                if (failedDisable.Count > 0)
                 {
-                    chatGui.Print($"[Preset] Applied always-on only mode");
+                    notificationMessage += $"\nFailed to disable: {string.Join(", ", failedDisable.Take(3))}";
+                    if (failedDisable.Count > 3) notificationMessage += $" and {failedDisable.Count - 3} more";
+                }
+                
+                ShowNotification(notificationMessage, true);
+                
+                log.Warning($"Applied always-on mode with failures - Enabled: {successfulEnable}/{toEnable.Count}, Disabled: {successfulDisable}/{toDisable.Count}");
+                if (failedEnable.Count > 0)
+                {
+                    log.Warning($"Failed to enable plugins: {string.Join(", ", failedEnable)}");
+                }
+                if (failedDisable.Count > 0)
+                {
+                    log.Warning($"Failed to disable plugins: {string.Join(", ", failedDisable)}");
                 }
             }
-
-            log.Info("Successfully applied always-on only mode");
+            else
+            {
+                ShowNotification($"Applied always-on only mode ({toEnable.Count} enabled, {toDisable.Count} disabled)");
+                log.Info($"Successfully applied always-on only mode: {toEnable.Count} enabled, {toDisable.Count} disabled");
+            }
         }
         catch (Exception ex)
         {
             log.Error(ex, "Failed to apply always-on only mode");
-            chatGui.PrintError($"[Preset] Failed to apply always-on only mode: {ex.Message}");
+            ShowNotification($"Failed to apply always-on only mode: {ex.Message}", true);
             throw;
         }
     }
@@ -159,11 +221,12 @@ public class PresetManager
         try
         {
             progress?.Report("Validating preset...");
+            log.Info($"Starting preset application: {preset.Name}");
+            
             var missingPlugins = GetMissingPlugins(preset);
-
-            if (missingPlugins.Any() && config.ShowNotifications && config.VerboseNotifications)
+            if (missingPlugins.Count > 0)
             {
-                chatGui.Print($"[Preset] Warning: {missingPlugins.Count} plugins missing from preset '{preset.Name}'");
+                log.Warning($"Preset {preset.Name} has {missingPlugins.Count} missing plugins: {string.Join(", ", missingPlugins)}");
             }
 
             var installedPlugins = pluginInterface.InstalledPlugins
@@ -178,14 +241,9 @@ public class PresetManager
                 {
                     effectiveEnabledSet.Add(alwaysOnPlugin);
                 }
-                else if (config.ShowNotifications && config.VerboseNotifications)
-                {
-                    chatGui.Print($"[Preset] Warning: Always-on plugin '{alwaysOnPlugin}' not installed");
-                }
             }
 
             progress?.Report($"Effective plugin set: {effectiveEnabledSet.Count} plugins");
-            log.Info($"Applying preset '{preset.Name}' with {effectiveEnabledSet.Count} effective plugins");
 
             var toDisable = installedPlugins.Values
                 .Where(p => p.IsLoaded && !effectiveEnabledSet.Contains(p.InternalName))
@@ -197,12 +255,13 @@ public class PresetManager
                 .ToList();
 
 
+            var failedDisable = new List<string>();
+            var failedEnable = new List<string>();
+
             progress?.Report($"Disabling {toDisable.Count} plugins...");
             foreach (var plugin in toDisable)
             {
-                log.Info($"Disabling: {plugin.Name} (InternalName: {plugin.InternalName})");
-                var cmd = $"/xldisableplugin \"{plugin.InternalName}\"";
-                log.Debug($"Executing: {cmd}");
+                var cmd = $"/xldisableplugin \"{plugin.Name}\"";
                 commandManager.ProcessCommand(cmd);
 
                 var maxWaitMs = 5000;
@@ -210,8 +269,8 @@ public class PresetManager
                 var isDisabled = false;
                 while (!isDisabled && waitedMs < maxWaitMs)
                 {
-                    await Task.Delay(100);
-                    waitedMs += 100;
+                    await Task.Delay(config.PluginStateCheckInterval);
+                    waitedMs += config.PluginStateCheckInterval;
 
                     var currentPlugin = pluginInterface.InstalledPlugins
                         .FirstOrDefault(p => p.InternalName == plugin.InternalName);
@@ -219,17 +278,13 @@ public class PresetManager
                     if (currentPlugin != null)
                     {
                         isDisabled = !currentPlugin.IsLoaded;
-                        log.Debug($"Plugin {plugin.Name} state check: IsLoaded={currentPlugin.IsLoaded}, waited={waitedMs}ms");
                     }
                 }
 
                 if (!isDisabled)
                 {
+                    failedDisable.Add(plugin.Name);
                     log.Warning($"Plugin {plugin.Name} did not disable within timeout (waited {waitedMs}ms)");
-                }
-                else
-                {
-                    log.Info($"Plugin {plugin.Name} disabled successfully (took {waitedMs}ms)");
                 }
 
                 await Task.Delay(config.DelayBetweenCommands);
@@ -239,9 +294,7 @@ public class PresetManager
             foreach (var pluginName in toEnable)
             {
                 var plugin = installedPlugins[pluginName];
-                log.Info($"Enabling: {plugin.Name} (InternalName: {plugin.InternalName})");
-                var cmd = $"/xlenableplugin \"{plugin.InternalName}\"";
-                log.Debug($"Executing: {cmd}");
+                var cmd = $"/xlenableplugin \"{plugin.Name}\"";
                 commandManager.ProcessCommand(cmd);
 
                 var maxWaitMs = 5000;
@@ -249,8 +302,8 @@ public class PresetManager
                 var isEnabled = false;
                 while (!isEnabled && waitedMs < maxWaitMs)
                 {
-                    await Task.Delay(100);
-                    waitedMs += 100;
+                    await Task.Delay(config.PluginStateCheckInterval);
+                    waitedMs += config.PluginStateCheckInterval;
 
                     var currentPlugin = pluginInterface.InstalledPlugins
                         .FirstOrDefault(p => p.InternalName == pluginName);
@@ -258,21 +311,13 @@ public class PresetManager
                     if (currentPlugin != null)
                     {
                         isEnabled = currentPlugin.IsLoaded;
-                        log.Debug($"Plugin {plugin.Name} state check: IsLoaded={isEnabled}, waited={waitedMs}ms");
                     }
                 }
 
                 if (!isEnabled)
                 {
+                    failedEnable.Add(plugin.Name);
                     log.Warning($"Plugin {plugin.Name} did not enable within timeout (waited {waitedMs}ms)");
-                    if (config.ShowNotifications && config.VerboseNotifications)
-                    {
-                        chatGui.PrintError($"[Preset] Failed to enable {plugin.Name}");
-                    }
-                }
-                else
-                {
-                    log.Info($"Plugin {plugin.Name} enabled successfully (took {waitedMs}ms)");
                 }
 
                 await Task.Delay(config.DelayBetweenCommands);
@@ -282,25 +327,48 @@ public class PresetManager
             pluginInterface.SavePluginConfig(config);
 
             progress?.Report($"Preset '{preset.Name}' applied successfully!");
-
-            if (config.ShowNotifications)
+            
+            var successfulDisable = toDisable.Count - failedDisable.Count;
+            var successfulEnable = toEnable.Count - failedEnable.Count;
+            
+            if (failedDisable.Count > 0 || failedEnable.Count > 0)
             {
-                if (config.VerboseNotifications)
+                var notificationMessage = $"Applied preset '{preset.Name}' with failures:\n" +
+                    $"Enabled: {successfulEnable}/{toEnable.Count}, Disabled: {successfulDisable}/{toDisable.Count}";
+                    
+                if (failedEnable.Count > 0)
                 {
-                    chatGui.Print($"[Preset] Applied '{preset.Name}' ({toEnable.Count} enabled, {toDisable.Count} disabled)");
+                    notificationMessage += $"\nFailed to enable: {string.Join(", ", failedEnable.Take(3))}";
+                    if (failedEnable.Count > 3) notificationMessage += $" and {failedEnable.Count - 3} more";
                 }
-                else
+                if (failedDisable.Count > 0)
                 {
-                    chatGui.Print($"[Preset] Applied '{preset.Name}'");
+                    notificationMessage += $"\nFailed to disable: {string.Join(", ", failedDisable.Take(3))}";
+                    if (failedDisable.Count > 3) notificationMessage += $" and {failedDisable.Count - 3} more";
+                }
+                
+                ShowNotification(notificationMessage, true);
+                
+                log.Warning($"Applied preset '{preset.Name}' with failures - Enabled: {successfulEnable}/{toEnable.Count}, Disabled: {successfulDisable}/{toDisable.Count}");
+                if (failedEnable.Count > 0)
+                {
+                    log.Warning($"Failed to enable plugins: {string.Join(", ", failedEnable)}");
+                }
+                if (failedDisable.Count > 0)
+                {
+                    log.Warning($"Failed to disable plugins: {string.Join(", ", failedDisable)}");
                 }
             }
-
-            log.Info($"Successfully applied preset '{preset.Name}'");
+            else
+            {
+                ShowNotification($"Applied '{preset.Name}' ({toEnable.Count} enabled, {toDisable.Count} disabled)");
+                log.Info($"Successfully applied preset '{preset.Name}': {toEnable.Count} enabled, {toDisable.Count} disabled");
+            }
         }
         catch (Exception ex)
         {
             log.Error(ex, $"Failed to apply preset '{preset.Name}'");
-            chatGui.PrintError($"[Preset] Failed to apply '{preset.Name}': {ex.Message}");
+            ShowNotification($"Failed to apply '{preset.Name}': {ex.Message}", true);
             throw;
         }
     }
@@ -320,11 +388,7 @@ public class PresetManager
                 commandManager.ProcessCommand($"/xlenableplugin \"{plugin.Name}\"");
             }
 
-            if (config.ShowNotifications)
-            {
-                chatGui.Print($"[Preset] Added '{internalName}' to always-on list");
-            }
-
+            ShowNotification($"Added '{internalName}' to always-on list");
             log.Info($"Added '{internalName}' to always-on list");
         }
     }
@@ -335,11 +399,7 @@ public class PresetManager
         {
             storage.SaveAlwaysOnPlugins(alwaysOnPlugins);
 
-            if (config.ShowNotifications)
-            {
-                chatGui.Print($"[Preset] Removed '{internalName}' from always-on list");
-            }
-
+            ShowNotification($"Removed '{internalName}' from always-on list");
             log.Info($"Removed '{internalName}' from always-on list");
         }
     }
@@ -457,10 +517,7 @@ public class PresetManager
             storage.DeletePreset(preset);
             log.Info($"Deleted preset '{preset.Name}'");
 
-            if (config.ShowNotifications)
-            {
-                chatGui.Print($"[Preset] Deleted preset '{preset.Name}'");
-            }
+            ShowNotification($"Deleted preset '{preset.Name}'");
         }
     }
 

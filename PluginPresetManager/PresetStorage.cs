@@ -54,7 +54,6 @@ public class PresetStorage
                 if (preset != null)
                 {
                     presets.Add(preset);
-                    log.Debug($"Loaded preset: {preset.Name} from {Path.GetFileName(file)}");
                 }
             }
             catch (Exception ex)

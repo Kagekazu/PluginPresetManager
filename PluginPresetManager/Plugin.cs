@@ -6,6 +6,7 @@ using Dalamud.Plugin;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using PluginPresetManager.Windows;
+using Dalamud.Interface.ImGuiNotification;
 
 namespace PluginPresetManager;
 
@@ -18,6 +19,9 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static ICommandManager CommandManager { get; private set; } = null!;
     [PluginService] internal static IChatGui ChatGui { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
+    [PluginService] internal static IFramework Framework { get; private set; } = null!;
+    [PluginService] internal static IClientState ClientState { get; private set; } = null!;
+    [PluginService] internal static INotificationManager NotificationManager { get; private set; } = null!;
 
     public Configuration Configuration { get; init; }
     public PresetStorage Storage { get; init; }
@@ -25,16 +29,23 @@ public sealed class Plugin : IDalamudPlugin
 
     public readonly WindowSystem WindowSystem = new("PluginPresetManager");
     private MainWindow MainWindow { get; init; }
+    
+    private bool defaultPresetApplied = false;
 
     public Plugin()
     {
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
+        
+        Configuration.Migrate();
+        PluginInterface.SavePluginConfig(Configuration);
+        
         Storage = new PresetStorage(PluginInterface, Log);
 
         PresetManager = new PresetManager(
             PluginInterface,
             CommandManager,
             ChatGui,
+            NotificationManager,
             Log,
             Configuration,
             Storage);
@@ -48,16 +59,15 @@ public sealed class Plugin : IDalamudPlugin
 
         if (Configuration.DefaultPresetId.HasValue)
         {
-            var defaultPreset = PresetManager.GetAllPresets()
-                .FirstOrDefault(p => p.Id == Configuration.DefaultPresetId.Value);
-            if (defaultPreset != null)
+            if (ClientState.IsLoggedIn)
             {
-                Log.Info($"Auto-applying default preset: {defaultPreset.Name}");
-                _ = PresetManager.ApplyPresetAsync(defaultPreset);
+                Log.Info("Already logged in, applying default preset");
+                ApplyDefaultPreset();
             }
             else
             {
-                Log.Warning($"Default preset ID {Configuration.DefaultPresetId.Value} not found");
+                ClientState.Login += OnLogin;
+                Log.Info("Default preset will apply on character login");
             }
         }
 
@@ -84,6 +94,8 @@ public sealed class Plugin : IDalamudPlugin
 
     public void Dispose()
     {
+        ClientState.Login -= OnLogin;
+        
         PluginInterface.UiBuilder.Draw -= WindowSystem.Draw;
         PluginInterface.UiBuilder.OpenConfigUi -= OpenConfigUi;
         PluginInterface.UiBuilder.OpenMainUi -= ToggleMainUi;
@@ -114,7 +126,6 @@ public sealed class Plugin : IDalamudPlugin
 
         if (argument.Equals("alwayson", StringComparison.OrdinalIgnoreCase))
         {
-            ChatGui.Print("[Preset] Applying always-on only mode...");
             Log.Info("Applying always-on only mode via command");
             _ = PresetManager.ApplyAlwaysOnOnlyAsync();
             return;
@@ -126,13 +137,17 @@ public sealed class Plugin : IDalamudPlugin
 
         if (preset != null)
         {
-            ChatGui.Print($"[Preset] Applying preset '{preset.Name}'...");
             Log.Info($"Applying preset '{preset.Name}' via command");
             _ = PresetManager.ApplyPresetAsync(preset);
         }
         else
         {
-            ChatGui.PrintError($"[Preset] Preset '{argument}' not found.");
+            NotificationManager.AddNotification(new Notification
+            {
+                Content = $"Preset '{argument}' not found",
+                Type = NotificationType.Error,
+                Title = "Preset Manager"
+            });
             if (allPresets.Any())
             {
                 ChatGui.Print("[Preset] Available presets:");
@@ -157,5 +172,33 @@ public sealed class Plugin : IDalamudPlugin
     private void OpenConfigUi()
     {
         MainWindow.FocusSettingsTab();
+    }
+    
+    private void OnLogin()
+    {
+        Log.Info("Character logged in, applying default preset");
+        ApplyDefaultPreset();
+    }
+    
+    private void ApplyDefaultPreset()
+    {
+        if (defaultPresetApplied || !Configuration.DefaultPresetId.HasValue)
+            return;
+            
+        defaultPresetApplied = true;
+        ClientState.Login -= OnLogin;
+        
+        var defaultPreset = PresetManager.GetAllPresets()
+            .FirstOrDefault(p => p.Id == Configuration.DefaultPresetId.Value);
+            
+        if (defaultPreset != null)
+        {
+            Log.Info($"Auto-applying default preset: {defaultPreset.Name}");
+            _ = PresetManager.ApplyPresetAsync(defaultPreset);
+        }
+        else
+        {
+            Log.Warning($"Default preset ID {Configuration.DefaultPresetId.Value} not found");
+        }
     }
 }

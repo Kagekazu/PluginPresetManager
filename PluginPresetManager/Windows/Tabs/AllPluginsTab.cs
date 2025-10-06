@@ -1,6 +1,9 @@
+using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Plugin;
 
 namespace PluginPresetManager.Windows.Tabs;
 
@@ -8,6 +11,13 @@ public class AllPluginsTab
 {
 	private readonly PresetManager presetManager;
 	private string searchFilter = string.Empty;
+	
+	private DateTime lastUpdateTime = DateTime.MinValue;
+	private const int UpdateIntervalMs = 500;
+	
+	private List<IExposedPlugin>? allPlugins;
+	private int loadedCount;
+	private int totalCount;
 
 	public AllPluginsTab(PresetManager presetManager)
 	{
@@ -16,6 +26,23 @@ public class AllPluginsTab
 
 	public void Draw()
 	{
+		var now = DateTime.Now;
+		if ((now - lastUpdateTime).TotalMilliseconds >= UpdateIntervalMs)
+		{
+			allPlugins = Plugin.PluginInterface.InstalledPlugins.ToList();
+			loadedCount = allPlugins.Count(p => p.IsLoaded);
+			totalCount = allPlugins.Count;
+			lastUpdateTime = now;
+		}
+		
+		if (allPlugins == null)
+		{
+			allPlugins = Plugin.PluginInterface.InstalledPlugins.ToList();
+			loadedCount = allPlugins.Count(p => p.IsLoaded);
+			totalCount = allPlugins.Count;
+			lastUpdateTime = DateTime.Now;
+		}
+		
 		ImGui.TextUnformatted("All Installed Plugins:");
 		ImGui.Separator();
 
@@ -23,9 +50,7 @@ public class AllPluginsTab
 		ImGui.InputTextWithHint("##Search", "Search plugins...", ref searchFilter, 100);
 		ImGui.Spacing();
 
-		var allPlugins = Plugin.PluginInterface.InstalledPlugins.ToList();
-		var loadedCount = allPlugins.Count(p => p.IsLoaded);
-		ImGui.Text($"Total: {allPlugins.Count} | Loaded: {loadedCount} | Unloaded: {allPlugins.Count - loadedCount}");
+		ImGui.Text($"Total: {totalCount} | Loaded: {loadedCount} | Unloaded: {totalCount - loadedCount}");
 		ImGui.Separator();
 
 		if (ImGui.BeginChild("AllPluginsList"))
@@ -38,7 +63,7 @@ public class AllPluginsTab
 				ImGui.TableSetupColumn("Always-On", ImGuiTableColumnFlags.WidthFixed, 80);
 				ImGui.TableHeadersRow();
 
-				foreach (var plugin in allPlugins.OrderBy(p => p.Name))
+				foreach (var plugin in allPlugins!.OrderBy(p => p.Name))
 				{
 					if (!string.IsNullOrEmpty(searchFilter) &&
 						!plugin.Name.Contains(searchFilter, System.StringComparison.OrdinalIgnoreCase) &&

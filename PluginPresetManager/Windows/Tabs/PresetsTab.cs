@@ -218,11 +218,11 @@ public class PresetsTab
 				ImGui.TextColored(new Vector4(0, 1, 0, 1), $"+{preview.ToEnable.Count}");
 			ImGui.SameLine();
 			if (preview.ToDisable.Any())
-				ImGui.TextColored(new Vector4(1, 0, 0, 1), $"-{preview.ToDisable.Count}");
+				ImGui.TextColored(new Vector4(0.7f, 0.7f, 0.7f, 1), $"-{preview.ToDisable.Count}");
 			if (preview.Missing.Any())
 			{
 				ImGui.SameLine();
-				ImGui.TextColored(new Vector4(1, 0, 0, 1), $"⚠{preview.Missing.Count} missing");
+				ImGui.TextColored(new Vector4(1, 0, 0, 1), $"{preview.Missing.Count} missing");
 			}
 		}
 		else
@@ -263,7 +263,9 @@ public class PresetsTab
 		}
 		if (ImGui.IsItemHovered())
 		{
-			ImGui.SetTooltip(isDefault ? "Click to unset as default preset" : "Set this preset to apply automatically on login");
+			ImGui.SetTooltip(isDefault 
+				? "Click to unset as default preset" 
+				: "Set this preset to apply automatically when you log in to a character");
 		}
 		ImGui.SameLine();
 		if (ImGui.Button("Delete", new Vector2(70, 0)))
@@ -339,17 +341,24 @@ public class PresetsTab
 				.ToDictionary(g => g.Key, g => g.First());
 			var alwaysOnPlugins = presetManager.GetAlwaysOnPlugins();
 
-			var alwaysOnInPreset = alwaysOnPlugins.Where(p => installedPlugins.ContainsKey(p)).ToList();
-			if (alwaysOnInPreset.Any())
+			if (alwaysOnPlugins.Any())
 			{
-				ImGui.TextColored(new Vector4(0.5f, 0.5f, 1, 1), $"Always-On ({alwaysOnInPreset.Count}):");
-				foreach (var pluginName in alwaysOnInPreset.OrderBy(p => installedPlugins[p].Name))
+				ImGui.TextColored(new Vector4(0.5f, 0.5f, 1, 1), $"Always-On ({alwaysOnPlugins.Count}):");
+				foreach (var pluginName in alwaysOnPlugins.OrderBy(p => installedPlugins.ContainsKey(p) ? installedPlugins[p].Name : p))
 				{
-					var plugin = installedPlugins[pluginName];
-					var color = plugin.IsLoaded ? new Vector4(0, 1, 0, 1) : new Vector4(0.5f, 0.5f, 0.5f, 1);
-					ImGui.TextColored(color, plugin.IsLoaded ? "●" : "○");
-					ImGui.SameLine();
-					ImGui.TextUnformatted(plugin.Name);
+					if (installedPlugins.TryGetValue(pluginName, out var plugin))
+					{
+						var color = plugin.IsLoaded ? new Vector4(0, 1, 0, 1) : new Vector4(0.5f, 0.5f, 0.5f, 1);
+						ImGui.TextColored(color, plugin.IsLoaded ? "●" : "○");
+						ImGui.SameLine();
+						ImGui.TextUnformatted(plugin.Name);
+					}
+					else
+					{
+						ImGui.TextColored(new Vector4(1, 0, 0, 1), pluginName);
+						ImGui.SameLine();
+						ImGui.TextColored(new Vector4(1, 0, 0, 1), "(missing)");
+					}
 				}
 				ImGui.Separator();
 			}
@@ -375,11 +384,9 @@ public class PresetsTab
 						}
 						else
 						{
-							ImGui.TextColored(new Vector4(1, 0, 0, 1), "✗");
-							ImGui.SameLine();
 							ImGui.TextColored(new Vector4(1, 0, 0, 1), pluginName);
 							ImGui.SameLine();
-							ImGui.TextColored(new Vector4(0.8f, 0.3f, 0.3f, 1), "(missing)");
+							ImGui.TextColored(new Vector4(1, 0, 0, 1), "(missing)");
 						}
 						ImGui.TableNextColumn();
 						if (ImGui.SmallButton($"Remove##{pluginName}"))
