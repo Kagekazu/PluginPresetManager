@@ -107,7 +107,7 @@ public class PresetManager
                 var cmd = $"/xldisableplugin \"{plugin.Name}\"";
                 commandManager.ProcessCommand(cmd);
 
-                var maxWaitMs = 5000;
+                var maxWaitMs = 30000;
                 var waitedMs = 0;
                 var isDisabled = false;
                 while (!isDisabled && waitedMs < maxWaitMs)
@@ -140,7 +140,7 @@ public class PresetManager
                 var cmd = $"/xlenableplugin \"{plugin.Name}\"";
                 commandManager.ProcessCommand(cmd);
 
-                var maxWaitMs = 5000;
+                var maxWaitMs = 30000;
                 var waitedMs = 0;
                 var isEnabled = false;
                 while (!isEnabled && waitedMs < maxWaitMs)
@@ -264,7 +264,7 @@ public class PresetManager
                 var cmd = $"/xldisableplugin \"{plugin.Name}\"";
                 commandManager.ProcessCommand(cmd);
 
-                var maxWaitMs = 5000;
+                var maxWaitMs = 30000;
                 var waitedMs = 0;
                 var isDisabled = false;
                 while (!isDisabled && waitedMs < maxWaitMs)
@@ -297,7 +297,7 @@ public class PresetManager
                 var cmd = $"/xlenableplugin \"{plugin.Name}\"";
                 commandManager.ProcessCommand(cmd);
 
-                var maxWaitMs = 5000;
+                var maxWaitMs = 30000;
                 var waitedMs = 0;
                 var isEnabled = false;
                 while (!isEnabled && waitedMs < maxWaitMs)

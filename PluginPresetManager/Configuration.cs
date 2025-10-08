@@ -19,7 +19,7 @@ public enum NotificationMode
 [Serializable]
 public class Configuration : IPluginConfiguration
 {
-    public int Version { get; set; } = 2;
+    public int Version { get; set; } = 3;
 
     public Guid? LastAppliedPresetId { get; set; }
 
@@ -27,7 +27,7 @@ public class Configuration : IPluginConfiguration
 
     public int DelayBetweenCommands { get; set; } = 50;
     
-    public int PluginStateCheckInterval { get; set; } = 250;
+    public int PluginStateCheckInterval { get; set; } = 1000;
     
     public NotificationMode NotificationMode { get; set; } = NotificationMode.Toast;
     
@@ -56,11 +56,22 @@ public class Configuration : IPluginConfiguration
                     NotificationMode = NotificationMode.Toast;
                 }
             }
-            
+
             ShowNotifications = null;
             VerboseNotifications = null;
-            
+
             Version = 2;
+        }
+
+        if (Version < 3)
+        {
+            // Update old check interval (250ms) to new less aggressive interval (1000ms)
+            if (PluginStateCheckInterval == 250)
+            {
+                PluginStateCheckInterval = 1000;
+            }
+
+            Version = 3;
         }
     }
 }
