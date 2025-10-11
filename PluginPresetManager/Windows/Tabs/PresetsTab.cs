@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.Utility.Raii;
 using PluginPresetManager.Models;
 
 namespace PluginPresetManager.Windows.Tabs;
@@ -26,12 +27,14 @@ public class PresetsTab
 
 	public void Draw()
 	{
-		if (ImGui.BeginChild("PresetList", new Vector2(170, 0), true))
+		using (var child = ImRaii.Child("PresetList", new Vector2(170, 0), true))
 		{
-			ImGui.SetNextItemWidth(-1);
+			if (child)
+			{
+				ImGui.SetNextItemWidth(-1);
 			ImGui.InputTextWithHint("##NewPreset", "New preset name...", ref newPresetName, 100);
 
-			if (ImGui.Button("Create Empty", new Vector2(-1, 0)))
+			if (ImGui.Button("Create Empty##PresetsTabCreateBtn", new Vector2(-1, 0)))
 			{
 				if (!string.IsNullOrWhiteSpace(newPresetName))
 				{
@@ -57,62 +60,58 @@ public class PresetsTab
 				var isLastApplied = config.LastAppliedPresetId == preset.Id;
 				var isDefault = config.DefaultPresetId == preset.Id;
 
-				if (isLastApplied)
+				using (isLastApplied ? ImRaii.PushColor(ImGuiCol.Text, new Vector4(0, 1, 0.5f, 1)) : null)
 				{
-					ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0, 1, 0.5f, 1));
-				}
+					var displayName = preset.Name;
+					if (isDefault)
+					{
+						displayName = $"★ {preset.Name}";
+					}
 
-				var displayName = preset.Name;
-				if (isDefault)
-				{
-					displayName = $"★ {preset.Name}";
-				}
-
-				if (ImGui.Selectable($"{displayName}##{preset.Id}", isSelected))
-				{
-					selectedPreset = preset;
-				}
-
-				if (isLastApplied)
-				{
-					ImGui.PopStyleColor();
+					if (ImGui.Selectable($"{displayName}##{preset.Id}", isSelected))
+					{
+						selectedPreset = preset;
+					}
 				}
 
 				if (ImGui.IsItemHovered())
 				{
-					ImGui.BeginTooltip();
-					ImGui.TextUnformatted($"Plugins: {preset.EnabledPlugins.Count}");
-					ImGui.TextUnformatted($"Created: {preset.CreatedAt:g}");
-					if (preset.LastModified != preset.CreatedAt)
+					using (ImRaii.Tooltip())
 					{
-						ImGui.TextUnformatted($"Modified: {preset.LastModified:g}");
+						ImGui.TextUnformatted($"Plugins: {preset.EnabledPlugins.Count}");
+						ImGui.TextUnformatted($"Created: {preset.CreatedAt:g}");
+						if (preset.LastModified != preset.CreatedAt)
+						{
+							ImGui.TextUnformatted($"Modified: {preset.LastModified:g}");
+						}
+						if (!string.IsNullOrEmpty(preset.Description))
+						{
+							ImGui.Separator();
+							ImGui.TextWrapped(preset.Description);
+						}
+						if (isDefault)
+						{
+							ImGui.Separator();
+							ImGui.TextColored(new Vector4(1, 1, 0, 1), "★ Default (Auto-applies on login)");
+						}
+						if (isLastApplied)
+						{
+							ImGui.Separator();
+							ImGui.TextColored(new Vector4(0, 1, 0.5f, 1), "Currently Applied");
+						}
 					}
-					if (!string.IsNullOrEmpty(preset.Description))
-					{
-						ImGui.Separator();
-						ImGui.TextWrapped(preset.Description);
-					}
-					if (isDefault)
-					{
-						ImGui.Separator();
-						ImGui.TextColored(new Vector4(1, 1, 0, 1), "★ Default (Auto-applies on login)");
-					}
-					if (isLastApplied)
-					{
-						ImGui.Separator();
-						ImGui.TextColored(new Vector4(0, 1, 0.5f, 1), "Currently Applied");
-					}
-					ImGui.EndTooltip();
 				}
 			}
-
-			ImGui.EndChild();
+			}
 		}
 
 		ImGui.SameLine();
 
-		if (ImGui.BeginChild("PresetDetails"))
+		using (var child = ImRaii.Child("PresetDetails"))
 		{
+			if (child)
+			{
+
 			if (selectedPreset != null)
 			{
 				DrawPresetDetails(selectedPreset);
@@ -124,8 +123,7 @@ public class PresetsTab
 				ImGui.TextColored(new Vector4(0.7f, 0.7f, 0.7f, 1),
 					"Create a new preset using the button on the left,\nor select an existing preset from the list.");
 			}
-
-			ImGui.EndChild();
+			}
 		}
 
 		if (selectedPreset != null && openAddPluginPopup)
@@ -134,54 +132,59 @@ public class PresetsTab
 			openAddPluginPopup = false;
 		}
 
-		if (selectedPreset != null && ImGui.BeginPopup($"AddPluginToPreset###{selectedPreset.Id}"))
+		if (selectedPreset != null)
 		{
-			ImGui.TextUnformatted("Add plugins:");
-			ImGui.InputTextWithHint("##AddPluginSearch", "Search...", ref searchFilter, 100);
-
-			if (ImGui.BeginChild("AddPluginList", new Vector2(400, 300)))
+			using (var popup = ImRaii.Popup($"AddPluginToPreset###{selectedPreset.Id}"))
 			{
-				var installedPlugins = Plugin.PluginInterface.InstalledPlugins
-					.OrderBy(p => p.Name)
-					.ToList();
-
-				foreach (var plugin in installedPlugins)
+				if (popup)
 				{
-					if (selectedPreset.EnabledPlugins.Contains(plugin.InternalName))
-						continue;
+					ImGui.TextUnformatted("Add plugins:");
+					ImGui.InputTextWithHint("##AddPluginSearch", "Search...", ref searchFilter, 100);
 
-					if (presetManager.GetAlwaysOnPlugins().Contains(plugin.InternalName))
-						continue;
+					using (var childList = ImRaii.Child("AddPluginList", new Vector2(400, 300)))
+					{
+						if (childList)
+						{
+							var installedPlugins = Plugin.PluginInterface.InstalledPlugins
+								.OrderBy(p => p.Name)
+								.ToList();
 
-					if (!string.IsNullOrEmpty(searchFilter) &&
-						!plugin.Name.Contains(searchFilter, StringComparison.OrdinalIgnoreCase) &&
-						!plugin.InternalName.Contains(searchFilter, StringComparison.OrdinalIgnoreCase))
-					{
-						continue;
-					}
+							foreach (var plugin in installedPlugins)
+							{
+								if (selectedPreset.EnabledPlugins.Contains(plugin.InternalName))
+									continue;
 
-					if (ImGui.Selectable($"{plugin.Name}##{plugin.InternalName}"))
-					{
-						selectedPreset.EnabledPlugins.Add(plugin.InternalName);
-						presetManager.UpdatePreset(selectedPreset);
-					}
+								if (presetManager.GetAlwaysOnPlugins().Contains(plugin.InternalName))
+									continue;
 
-					if (plugin.IsDev)
-					{
-						ImGui.SameLine();
-						ImGui.TextColored(new Vector4(1, 0, 1, 1), "[DEV]");
-					}
-					if (plugin.IsThirdParty)
-					{
-						ImGui.SameLine();
-						ImGui.TextColored(new Vector4(1, 1, 0, 1), "[3rd]");
+								if (!string.IsNullOrEmpty(searchFilter) &&
+									!plugin.Name.Contains(searchFilter, StringComparison.OrdinalIgnoreCase) &&
+									!plugin.InternalName.Contains(searchFilter, StringComparison.OrdinalIgnoreCase))
+								{
+									continue;
+								}
+
+								if (ImGui.Selectable($"{plugin.Name}##{plugin.InternalName}"))
+								{
+									selectedPreset.EnabledPlugins.Add(plugin.InternalName);
+									presetManager.UpdatePreset(selectedPreset);
+								}
+
+								if (plugin.IsDev)
+								{
+									ImGui.SameLine();
+									ImGui.TextColored(new Vector4(1, 0, 1, 1), "[DEV]");
+								}
+								if (plugin.IsThirdParty)
+								{
+									ImGui.SameLine();
+									ImGui.TextColored(new Vector4(1, 1, 0, 1), "[3rd]");
+								}
+							}
+						}
 					}
 				}
-
-				ImGui.EndChild();
 			}
-
-			ImGui.EndPopup();
 		}
 	}
 
@@ -234,32 +237,27 @@ public class PresetsTab
 		var totalButtonsWidth = 80f + 100f + 70f + (2 * style.ItemSpacing.X);
 		var right = ImGui.GetContentRegionMax().X;
 		ImGui.SetCursorPosX(right - totalButtonsWidth);
-		if (ImGui.Button("Apply", new Vector2(80, 0)))
+		if (ImGui.Button($"Apply##{preset.Id}_Apply", new Vector2(80, 0)))
 		{
 			_ = presetManager.ApplyPresetAsync(preset);
 		}
 		ImGui.SameLine();
 
 		var isDefault = config.DefaultPresetId == preset.Id;
-		if (isDefault)
+		using (isDefault ? ImRaii.PushColor(ImGuiCol.Button, new Vector4(0.2f, 0.6f, 0.2f, 1)) : null)
 		{
-			ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.2f, 0.6f, 0.2f, 1));
-		}
-		if (ImGui.Button(isDefault ? "Default ✓" : "Set Default", new Vector2(100, 0)))
-		{
-			if (isDefault)
+			if (ImGui.Button(isDefault ? $"Default ✓##{preset.Id}_Default" : $"Set Default##{preset.Id}_Default", new Vector2(100, 0)))
 			{
-				config.DefaultPresetId = null;
+				if (isDefault)
+				{
+					config.DefaultPresetId = null;
+				}
+				else
+				{
+					config.DefaultPresetId = preset.Id;
+				}
+				Plugin.PluginInterface.SavePluginConfig(config);
 			}
-			else
-			{
-				config.DefaultPresetId = preset.Id;
-			}
-			Plugin.PluginInterface.SavePluginConfig(config);
-		}
-		if (isDefault)
-		{
-			ImGui.PopStyleColor();
 		}
 		if (ImGui.IsItemHovered())
 		{
@@ -268,12 +266,12 @@ public class PresetsTab
 				: "Set this preset to apply automatically when you log in to a character");
 		}
 		ImGui.SameLine();
-		if (ImGui.Button("Delete", new Vector2(70, 0)))
+		if (ImGui.Button($"Delete##{preset.Id}_Delete", new Vector2(70, 0)))
 		{
 			ImGui.OpenPopup($"DeleteConfirm###{preset.Id}");
 		}
 
-		if (ImGui.Button("Add Enabled Plugins", new Vector2(150, 0)))
+		if (ImGui.Button($"Add Enabled Plugins##{preset.Id}_AddEnabled", new Vector2(150, 0)))
 		{
 			var alwaysOn = presetManager.GetAlwaysOnPlugins();
 			var addedCount = 0;
@@ -298,26 +296,27 @@ public class PresetsTab
 		}
 
 		var trueValue = true;
-		if (ImGui.BeginPopupModal($"DeleteConfirm###{preset.Id}", ref trueValue, ImGuiWindowFlags.AlwaysAutoResize))
+		using (var modal = ImRaii.PopupModal($"DeleteConfirm###{preset.Id}", ref trueValue, ImGuiWindowFlags.AlwaysAutoResize))
 		{
-			ImGui.Text($"Are you sure you want to delete '{preset.Name}'?");
-			ImGui.Spacing();
-
-			if (ImGui.Button("Yes", new Vector2(120, 0)))
+			if (modal)
 			{
-				presetManager.DeletePreset(preset);
-				selectedPreset = null;
-				ImGui.CloseCurrentPopup();
+				ImGui.Text($"Are you sure you want to delete '{preset.Name}'?");
+				ImGui.Spacing();
+
+				if (ImGui.Button($"Yes##{preset.Id}_DeleteYes", new Vector2(120, 0)))
+				{
+					presetManager.DeletePreset(preset);
+					selectedPreset = null;
+					ImGui.CloseCurrentPopup();
+				}
+
+				ImGui.SameLine();
+
+				if (ImGui.Button($"No##{preset.Id}_DeleteNo", new Vector2(120, 0)))
+				{
+					ImGui.CloseCurrentPopup();
+				}
 			}
-
-			ImGui.SameLine();
-
-			if (ImGui.Button("No", new Vector2(120, 0)))
-			{
-				ImGui.CloseCurrentPopup();
-			}
-
-			ImGui.EndPopup();
 		}
 
 		ImGui.Separator();
@@ -334,9 +333,11 @@ public class PresetsTab
 		ImGui.SameLine();
 		ImGui.Text($"Plugins: {preset.EnabledPlugins.Count}");
 
-		if (ImGui.BeginChild("PresetPlugins", new Vector2(0, 0), true))
+		using (var child = ImRaii.Child("PresetPlugins", new Vector2(0, 0), true))
 		{
-			var installedPlugins = Plugin.PluginInterface.InstalledPlugins
+			if (child)
+			{
+				var installedPlugins = Plugin.PluginInterface.InstalledPlugins
 				.GroupBy(p => p.InternalName)
 				.ToDictionary(g => g.Key, g => g.First());
 			var alwaysOnPlugins = presetManager.GetAlwaysOnPlugins();
@@ -366,44 +367,45 @@ public class PresetsTab
 			if (preset.EnabledPlugins.Any())
 			{
 				ImGui.TextColored(new Vector4(1, 1, 1, 1), $"Selected ({preset.EnabledPlugins.Count}):");
-				if (ImGui.BeginTable("PresetSelectedTable", 2, ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerV))
+				using (var table = ImRaii.Table("PresetSelectedTable", 2, ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerV))
 				{
-					ImGui.TableSetupColumn("Plugin", ImGuiTableColumnFlags.WidthStretch);
-					ImGui.TableSetupColumn("Actions", ImGuiTableColumnFlags.WidthFixed, 80);
-					foreach (var pluginName in preset.EnabledPlugins.OrderBy(x => x))
+					if (table)
 					{
-						var isInstalled = installedPlugins.TryGetValue(pluginName, out var plugin);
-						ImGui.TableNextRow();
-						ImGui.TableNextColumn();
-						if (isInstalled)
+						ImGui.TableSetupColumn("Plugin", ImGuiTableColumnFlags.WidthStretch);
+						ImGui.TableSetupColumn("Actions", ImGuiTableColumnFlags.WidthFixed, 80);
+						foreach (var pluginName in preset.EnabledPlugins.OrderBy(x => x))
 						{
-							var color = plugin!.IsLoaded ? new Vector4(0, 1, 0, 1) : new Vector4(0.5f, 0.5f, 0.5f, 1);
-							ImGui.TextColored(color, plugin.IsLoaded ? "●" : "○");
-							ImGui.SameLine();
-							ImGui.TextUnformatted(plugin.Name);
-						}
-						else
-						{
-							ImGui.TextColored(new Vector4(1, 0, 0, 1), pluginName);
-							ImGui.SameLine();
-							ImGui.TextColored(new Vector4(1, 0, 0, 1), "(missing)");
-						}
-						ImGui.TableNextColumn();
-						if (ImGui.SmallButton($"Remove##{pluginName}"))
-						{
-							preset.EnabledPlugins.Remove(pluginName);
-							presetManager.UpdatePreset(preset);
+							var isInstalled = installedPlugins.TryGetValue(pluginName, out var plugin);
+							ImGui.TableNextRow();
+							ImGui.TableNextColumn();
+							if (isInstalled)
+							{
+								var color = plugin!.IsLoaded ? new Vector4(0, 1, 0, 1) : new Vector4(0.5f, 0.5f, 0.5f, 1);
+								ImGui.TextColored(color, plugin.IsLoaded ? "●" : "○");
+								ImGui.SameLine();
+								ImGui.TextUnformatted(plugin.Name);
+							}
+							else
+							{
+								ImGui.TextColored(new Vector4(1, 0, 0, 1), pluginName);
+								ImGui.SameLine();
+								ImGui.TextColored(new Vector4(1, 0, 0, 1), "(missing)");
+							}
+							ImGui.TableNextColumn();
+							if (ImGui.SmallButton($"Remove##{pluginName}"))
+							{
+								preset.EnabledPlugins.Remove(pluginName);
+								presetManager.UpdatePreset(preset);
+							}
 						}
 					}
-					ImGui.EndTable();
 				}
 			}
 			else
 			{
 				ImGui.TextColored(new Vector4(0.6f, 0.6f, 0.6f, 1), "No plugins. Click 'Add' to add.");
 			}
-
-			ImGui.EndChild();
+			}
 		}
 	}
 }

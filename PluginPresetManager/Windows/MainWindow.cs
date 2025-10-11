@@ -3,6 +3,7 @@ using System.Linq;
 using System.Numerics;
 using Dalamud.Interface.Windowing;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.Utility.Raii;
 using PluginPresetManager.Models;
 
 namespace PluginPresetManager.Windows;
@@ -52,41 +53,43 @@ public class MainWindow : Window, IDisposable
 
     public override void Draw()
     {
-        if (ImGui.BeginTabBar("PresetTabs###main_tabs"))
+        using (var tabBar = ImRaii.TabBar("PresetTabs###main_tabs"))
         {
-            if (ImGui.BeginTabItem("Presets###tab_presets"))
+            if (!tabBar) return;
+
+            using (var tabItem = ImRaii.TabItem("Presets###tab_presets"))
             {
-                presetsTab.Draw();
-                ImGui.EndTabItem();
+                if (tabItem)
+                    presetsTab.Draw();
             }
 
-            if (ImGui.BeginTabItem("Always-On Plugins###tab_always"))
+            using (var tabItem = ImRaii.TabItem("Always-On Plugins###tab_always"))
             {
-                alwaysOnTab.Draw();
-                ImGui.EndTabItem();
+                if (tabItem)
+                    alwaysOnTab.Draw();
             }
 
-            if (ImGui.BeginTabItem("All Plugins###tab_all"))
+            using (var tabItem = ImRaii.TabItem("All Plugins###tab_all"))
             {
-                allPluginsTab.Draw();
-                ImGui.EndTabItem();
+                if (tabItem)
+                    allPluginsTab.Draw();
             }
 
-            if (ImGui.BeginTabItem("Help###tab_help"))
+            using (var tabItem = ImRaii.TabItem("Help###tab_help"))
             {
-                helpTab.Draw();
-                ImGui.EndTabItem();
+                if (tabItem)
+                    helpTab.Draw();
             }
 
             var settingsFlags = focusSettingsTabNextDraw ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None;
-            if (ImGui.BeginTabItem("Settings###tab_settings", settingsFlags))
+            using (var tabItem = ImRaii.TabItem("Settings###tab_settings", settingsFlags))
             {
-                if (focusSettingsTabNextDraw) focusSettingsTabNextDraw = false;
-                settingsTab.Draw();
-                ImGui.EndTabItem();
+                if (tabItem)
+                {
+                    if (focusSettingsTabNextDraw) focusSettingsTabNextDraw = false;
+                    settingsTab.Draw();
+                }
             }
-
-            ImGui.EndTabBar();
         }
     }
 

@@ -56,7 +56,7 @@ public class HelpTab
 
 		ImGui.Separator();
 
-		if (ImGui.Button("Open GitHub Repository", new Vector2(200, 0)))
+		if (ImGui.Button("Open GitHub Repository##HelpTabGitHub", new Vector2(200, 0)))
 		{
 			System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
 			{

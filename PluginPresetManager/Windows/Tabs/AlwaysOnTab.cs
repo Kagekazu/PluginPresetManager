@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.Utility.Raii;
 using Dalamud.Plugin;
 
 namespace PluginPresetManager.Windows.Tabs;
@@ -54,8 +55,10 @@ public class AlwaysOnTab
 		ImGui.TextColored(new Vector4(1, 1, 0, 1), $"Always-On Plugins: {presetManager.GetAlwaysOnPlugins().Count}");
 		ImGui.Separator();
 
-		if (ImGui.BeginChild("AlwaysOnList", new Vector2(0, -35), true))
+		using (var child = ImRaii.Child("AlwaysOnList", new Vector2(0, -35), true))
 		{
+			if (child)
+			{
 
 			foreach (var pluginName in presetManager.GetAlwaysOnPlugins().OrderBy(n => n).ToList())
 			{
@@ -76,17 +79,17 @@ public class AlwaysOnTab
 
 				ImGui.SameLine();
 				var isThisPlugin = pluginName == Plugin.PluginInterface.InternalName;
-				if (isThisPlugin) ImGui.BeginDisabled();
-				if (ImGui.SmallButton($"Remove##{pluginName}"))
+				using (isThisPlugin ? ImRaii.Disabled() : null)
 				{
-					if (!isThisPlugin)
-						presetManager.RemoveAlwaysOnPlugin(pluginName);
+					if (ImGui.SmallButton($"Remove##{pluginName}"))
+					{
+						if (!isThisPlugin)
+							presetManager.RemoveAlwaysOnPlugin(pluginName);
+					}
 				}
-				if (isThisPlugin)
+				if (isThisPlugin && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
 				{
-					ImGui.EndDisabled();
-					if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-						ImGui.SetTooltip("Cannot remove PluginPresetManager from always-on to prevent self-disable");
+					ImGui.SetTooltip("Cannot remove PluginPresetManager from always-on to prevent self-disable");
 				}
 
 				if (isInstalled && !pluginInfo!.IsLoaded)
@@ -95,57 +98,58 @@ public class AlwaysOnTab
 					ImGui.TextColored(new Vector4(1, 0, 0, 1), "(Plugin is not loaded!)");
 				}
 			}
-
-			ImGui.EndChild();
+			}
 		}
 
-		if (ImGui.Button("Add Plugin to Always-On", new Vector2(-1, 0)))
+		if (ImGui.Button("Add Plugin to Always-On##AlwaysOnTabBtn", new Vector2(-1, 0)))
 		{
 			searchFilter = string.Empty;
 			ImGui.OpenPopup("SelectPluginAlwaysOn");
 		}
 
-		if (ImGui.BeginPopup("SelectPluginAlwaysOn"))
+		using (var popup = ImRaii.Popup("SelectPluginAlwaysOn"))
 		{
-			ImGui.TextUnformatted("Select plugin to add:");
-			ImGui.InputTextWithHint("##AlwaysOnSearch", "Search...", ref searchFilter, 100);
-
-			if (ImGui.BeginChild("AlwaysOnPluginList", new Vector2(400, 300)))
+			if (popup)
 			{
-				foreach (var pi in pluginList!)
+				ImGui.TextUnformatted("Select plugin to add:");
+				ImGui.InputTextWithHint("##AlwaysOnSearch", "Search...", ref searchFilter, 100);
+
+				using (var childList = ImRaii.Child("AlwaysOnPluginList", new Vector2(400, 300)))
 				{
-					if (presetManager.GetAlwaysOnPlugins().Contains(pi.InternalName))
-						continue;
+					if (childList)
+					{
+						foreach (var pi in pluginList!)
+						{
+							if (presetManager.GetAlwaysOnPlugins().Contains(pi.InternalName))
+								continue;
 
-					if (!string.IsNullOrEmpty(searchFilter) &&
-						!pi.Name.Contains(searchFilter, StringComparison.OrdinalIgnoreCase) &&
-						!pi.InternalName.Contains(searchFilter, StringComparison.OrdinalIgnoreCase))
-					{
-						continue;
-					}
+							if (!string.IsNullOrEmpty(searchFilter) &&
+								!pi.Name.Contains(searchFilter, StringComparison.OrdinalIgnoreCase) &&
+								!pi.InternalName.Contains(searchFilter, StringComparison.OrdinalIgnoreCase))
+							{
+								continue;
+							}
 
-					if (ImGui.Selectable(pi.Name))
-					{
-						presetManager.AddAlwaysOnPlugin(pi.InternalName);
-						ImGui.CloseCurrentPopup();
-					}
+							if (ImGui.Selectable($"{pi.Name}##AlwaysOnSelect_{pi.InternalName}"))
+							{
+								presetManager.AddAlwaysOnPlugin(pi.InternalName);
+								ImGui.CloseCurrentPopup();
+							}
 
-					if (pi.IsDev)
-					{
-						ImGui.SameLine();
-						ImGui.TextColored(new Vector4(1, 0, 1, 1), "[DEV]");
-					}
-					if (pi.IsThirdParty)
-					{
-						ImGui.SameLine();
-						ImGui.TextColored(new Vector4(1, 1, 0, 1), "[3rd]");
+							if (pi.IsDev)
+							{
+								ImGui.SameLine();
+								ImGui.TextColored(new Vector4(1, 0, 1, 1), "[DEV]");
+							}
+							if (pi.IsThirdParty)
+							{
+								ImGui.SameLine();
+								ImGui.TextColored(new Vector4(1, 1, 0, 1), "[3rd]");
+							}
+						}
 					}
 				}
-
-				ImGui.EndChild();
 			}
-
-			ImGui.EndPopup();
 		}
 	}
 }
