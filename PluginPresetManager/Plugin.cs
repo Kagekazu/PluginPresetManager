@@ -22,24 +22,26 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IFramework Framework { get; private set; } = null!;
     [PluginService] internal static IClientState ClientState { get; private set; } = null!;
     [PluginService] internal static INotificationManager NotificationManager { get; private set; } = null!;
+    [PluginService] internal static IPlayerState PlayerState { get; private set; } = null!;
+    [PluginService] internal static IObjectTable ObjectTable { get; private set; } = null!;
 
     public Configuration Configuration { get; init; }
-    public PresetStorage Storage { get; init; }
+    public CharacterStorage CharacterStorage { get; init; }
     public PresetManager PresetManager { get; init; }
 
     public readonly WindowSystem WindowSystem = new("PluginPresetManager");
     private MainWindow MainWindow { get; init; }
-    
+
     private bool defaultPresetApplied = false;
 
     public Plugin()
     {
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
-        
+
         Configuration.Migrate();
         PluginInterface.SavePluginConfig(Configuration);
-        
-        Storage = new PresetStorage(PluginInterface, Log);
+
+        CharacterStorage = new CharacterStorage(PluginInterface, Log);
 
         PresetManager = new PresetManager(
             PluginInterface,
@@ -48,27 +50,37 @@ public sealed class Plugin : IDalamudPlugin
             NotificationManager,
             Log,
             Configuration,
-            Storage);
+            CharacterStorage);
 
-        var thisPluginInternalName = PluginInterface.InternalName;
-        if (!PresetManager.GetAlwaysOnPlugins().Contains(thisPluginInternalName))
+        // Always subscribe to login event
+        ClientState.Login += OnLogin;
+
+        // If already logged in, handle it on the next frame (to avoid threading issues)
+        if (ClientState.IsLoggedIn && PlayerState.ContentId != 0)
         {
-            Log.Info("Adding PluginPresetManager to always-on list to prevent self-disable");
-            PresetManager.AddAlwaysOnPlugin(thisPluginInternalName);
+            Framework.RunOnFrameworkThread(() =>
+            {
+                var localPlayer = ObjectTable.LocalPlayer;
+                var name = localPlayer?.Name.ToString() ?? "Unknown";
+                var world = localPlayer?.HomeWorld.ValueNullable?.Name.ToString() ?? "";
+                PresetManager.SwitchCharacter(PlayerState.ContentId, name, world);
+                Log.Info($"Already logged in as {name}, loaded character data");
+
+                // Ensure this plugin is always-on
+                EnsureAlwaysOn();
+
+                // Apply default preset if configured
+                if (PresetManager.CurrentConfig.DefaultPresetId.HasValue)
+                {
+                    ApplyDefaultPreset();
+                }
+            });
         }
-
-        if (Configuration.DefaultPresetId.HasValue)
+        else
         {
-            if (ClientState.IsLoggedIn)
-            {
-                Log.Info("Already logged in, applying default preset");
-                ApplyDefaultPreset();
-            }
-            else
-            {
-                ClientState.Login += OnLogin;
-                Log.Info("Default preset will apply on character login");
-            }
+            // Ensure always-on for global config
+            EnsureAlwaysOn();
+            Log.Info("Will check for default preset on character login");
         }
 
         MainWindow = new MainWindow(this);
@@ -174,23 +186,53 @@ public sealed class Plugin : IDalamudPlugin
         MainWindow.FocusSettingsTab();
     }
     
+    private void EnsureAlwaysOn()
+    {
+        var thisPluginInternalName = PluginInterface.InternalName;
+        if (!PresetManager.GetAlwaysOnPlugins().Contains(thisPluginInternalName))
+        {
+            Log.Info("Adding PluginPresetManager to always-on list to prevent self-disable");
+            PresetManager.AddAlwaysOnPlugin(thisPluginInternalName);
+        }
+    }
+
     private void OnLogin()
     {
-        Log.Info("Character logged in, applying default preset");
-        ApplyDefaultPreset();
+        // Run on framework thread to safely access LocalPlayer
+        Framework.RunOnFrameworkThread(() =>
+        {
+            // Switch to the logged-in character's data
+            if (PlayerState.ContentId != 0)
+            {
+                var localPlayer = ObjectTable.LocalPlayer;
+                var name = localPlayer?.Name.ToString() ?? "Unknown";
+                var world = localPlayer?.HomeWorld.ValueNullable?.Name.ToString() ?? "";
+                PresetManager.SwitchCharacter(PlayerState.ContentId, name, world);
+                Log.Info($"Character logged in: {name} @ {world}");
+
+                // Ensure always-on for this character
+                EnsureAlwaysOn();
+            }
+
+            ApplyDefaultPreset();
+        });
     }
-    
+
     private void ApplyDefaultPreset()
     {
-        if (defaultPresetApplied || !Configuration.DefaultPresetId.HasValue)
+        if (defaultPresetApplied)
             return;
-            
+
+        var config = PresetManager.CurrentConfig;
+        if (!config.DefaultPresetId.HasValue)
+            return;
+
         defaultPresetApplied = true;
         ClientState.Login -= OnLogin;
-        
+
         var defaultPreset = PresetManager.GetAllPresets()
-            .FirstOrDefault(p => p.Id == Configuration.DefaultPresetId.Value);
-            
+            .FirstOrDefault(p => p.Id == config.DefaultPresetId.Value);
+
         if (defaultPreset != null)
         {
             Log.Info($"Auto-applying default preset: {defaultPreset.Name}");
@@ -198,7 +240,12 @@ public sealed class Plugin : IDalamudPlugin
         }
         else
         {
-            Log.Warning($"Default preset ID {Configuration.DefaultPresetId.Value} not found");
+            Log.Warning($"Default preset ID {config.DefaultPresetId.Value} not found");
         }
+    }
+
+    public void SaveConfiguration()
+    {
+        PluginInterface.SavePluginConfig(Configuration);
     }
 }

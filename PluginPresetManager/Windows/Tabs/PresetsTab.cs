@@ -3,6 +3,7 @@ using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility.Raii;
+using Newtonsoft.Json;
 using PluginPresetManager.Models;
 
 namespace PluginPresetManager.Windows.Tabs;
@@ -10,20 +11,22 @@ namespace PluginPresetManager.Windows.Tabs;
 public class PresetsTab
 {
 	private readonly Plugin plugin;
-	private readonly Configuration config;
 	private readonly PresetManager presetManager;
 
 	private string newPresetName = string.Empty;
 	private Preset? selectedPreset;
+	private Preset? presetToDelete;
 	private string searchFilter = string.Empty;
 	private bool openAddPluginPopup = false;
+	private string importError = string.Empty;
 
-	public PresetsTab(Plugin plugin, Configuration config, PresetManager presetManager)
+	public PresetsTab(Plugin plugin, PresetManager presetManager)
 	{
 		this.plugin = plugin;
-		this.config = config;
 		this.presetManager = presetManager;
 	}
+
+	private CharacterConfig Config => presetManager.CurrentConfig;
 
 	public void Draw()
 	{
@@ -50,15 +53,25 @@ public class PresetsTab
 				}
 			}
 
+			if (ImGui.Button("Import from Clipboard##ImportBtn", new Vector2(-1, 0)))
+			{
+				ImportPresetFromClipboard();
+			}
+
+			if (!string.IsNullOrEmpty(importError))
+			{
+				ImGui.TextColored(new Vector4(1, 0, 0, 1), importError);
+			}
+
 			ImGui.Separator();
-			ImGui.TextUnformatted("Presets:");
+			ImGui.TextUnformatted($"Presets ({presetManager.GetAllPresets().Count}):");
 			ImGui.Separator();
 
 			foreach (var preset in presetManager.GetAllPresets())
 			{
 				var isSelected = selectedPreset == preset;
-				var isLastApplied = config.LastAppliedPresetId == preset.Id;
-				var isDefault = config.DefaultPresetId == preset.Id;
+				var isLastApplied = Config.LastAppliedPresetId == preset.Id;
+				var isDefault = Config.DefaultPresetId == preset.Id;
 
 				using (isLastApplied ? ImRaii.PushColor(ImGuiCol.Text, new Vector4(0, 1, 0.5f, 1)) : null)
 				{
@@ -98,6 +111,48 @@ public class PresetsTab
 						{
 							ImGui.Separator();
 							ImGui.TextColored(new Vector4(0, 1, 0.5f, 1), "Currently Applied");
+						}
+						ImGui.Separator();
+						ImGui.TextColored(new Vector4(0.5f, 0.5f, 0.5f, 1), "Right-click for options");
+					}
+				}
+
+				// Context menu for preset
+				using (var contextMenu = ImRaii.ContextPopupItem($"PresetContext_{preset.Id}"))
+				{
+					if (contextMenu)
+					{
+						if (ImGui.MenuItem("Apply"))
+						{
+							_ = presetManager.ApplyPresetAsync(preset);
+						}
+
+						if (ImGui.MenuItem("Duplicate"))
+						{
+							var duplicate = presetManager.DuplicatePreset(preset);
+							selectedPreset = duplicate;
+						}
+
+						ImGui.Separator();
+
+						if (ImGui.MenuItem(isDefault ? "Unset as Default" : "Set as Default"))
+						{
+							Config.DefaultPresetId = isDefault ? null : preset.Id;
+							presetManager.SaveCharacterConfig();
+						}
+
+						ImGui.Separator();
+
+						if (ImGui.MenuItem("Export to Clipboard"))
+						{
+							ExportPresetToClipboard(preset);
+						}
+
+						ImGui.Separator();
+
+						if (ImGui.MenuItem("Delete"))
+						{
+							presetToDelete = preset;
 						}
 					}
 				}
@@ -243,20 +298,20 @@ public class PresetsTab
 		}
 		ImGui.SameLine();
 
-		var isDefault = config.DefaultPresetId == preset.Id;
+		var isDefault = Config.DefaultPresetId == preset.Id;
 		using (isDefault ? ImRaii.PushColor(ImGuiCol.Button, new Vector4(0.2f, 0.6f, 0.2f, 1)) : null)
 		{
 			if (ImGui.Button(isDefault ? $"Default ✓##{preset.Id}_Default" : $"Set Default##{preset.Id}_Default", new Vector2(100, 0)))
 			{
 				if (isDefault)
 				{
-					config.DefaultPresetId = null;
+					Config.DefaultPresetId = null;
 				}
 				else
 				{
-					config.DefaultPresetId = preset.Id;
+					Config.DefaultPresetId = preset.Id;
 				}
-				Plugin.PluginInterface.SavePluginConfig(config);
+				presetManager.SaveCharacterConfig();
 			}
 		}
 		if (ImGui.IsItemHovered())
@@ -407,6 +462,107 @@ public class PresetsTab
 			}
 			}
 		}
+
+		// Handle delete confirmation from context menu
+		if (presetToDelete != null)
+		{
+			ImGui.OpenPopup($"ConfirmDelete##ctx");
+		}
+
+		var trueVal = true;
+		if (ImGui.BeginPopupModal($"ConfirmDelete##ctx", ref trueVal, ImGuiWindowFlags.AlwaysAutoResize))
+		{
+			if (presetToDelete != null)
+			{
+				ImGui.Text($"Delete preset '{presetToDelete.Name}'?");
+				ImGui.Spacing();
+
+				if (ImGui.Button("Yes", new Vector2(100, 0)))
+				{
+					presetManager.DeletePreset(presetToDelete);
+					if (selectedPreset == presetToDelete)
+						selectedPreset = null;
+					presetToDelete = null;
+					ImGui.CloseCurrentPopup();
+				}
+				ImGui.SameLine();
+				if (ImGui.Button("No", new Vector2(100, 0)))
+				{
+					presetToDelete = null;
+					ImGui.CloseCurrentPopup();
+				}
+			}
+			ImGui.EndPopup();
+		}
+	}
+
+	private void ExportPresetToClipboard(Preset preset)
+	{
+		try
+		{
+			var exportData = new PresetExportData
+			{
+				Name = preset.Name,
+				Description = preset.Description,
+				EnabledPlugins = preset.EnabledPlugins.ToList()
+			};
+
+			var json = JsonConvert.SerializeObject(exportData, Formatting.Indented);
+			ImGui.SetClipboardText(json);
+			Plugin.Log.Info($"Exported preset '{preset.Name}' to clipboard");
+		}
+		catch (Exception ex)
+		{
+			Plugin.Log.Error(ex, "Failed to export preset");
+		}
+	}
+
+	private void ImportPresetFromClipboard()
+	{
+		try
+		{
+			importError = string.Empty;
+			var json = ImGui.GetClipboardText();
+
+			if (string.IsNullOrWhiteSpace(json))
+			{
+				importError = "Clipboard is empty";
+				return;
+			}
+
+			var exportData = JsonConvert.DeserializeObject<PresetExportData>(json);
+			if (exportData == null || string.IsNullOrWhiteSpace(exportData.Name))
+			{
+				importError = "Invalid preset data";
+				return;
+			}
+
+			var newPreset = new Preset
+			{
+				Id = Guid.NewGuid(),
+				Name = exportData.Name,
+				Description = exportData.Description ?? string.Empty,
+				EnabledPlugins = new System.Collections.Generic.HashSet<string>(exportData.EnabledPlugins ?? new System.Collections.Generic.List<string>()),
+				CreatedAt = DateTime.Now,
+				LastModified = DateTime.Now
+			};
+
+			presetManager.AddPreset(newPreset);
+			selectedPreset = newPreset;
+			Plugin.Log.Info($"Imported preset '{newPreset.Name}' from clipboard");
+		}
+		catch (Exception ex)
+		{
+			importError = "Failed to parse preset";
+			Plugin.Log.Error(ex, "Failed to import preset");
+		}
+	}
+
+	private class PresetExportData
+	{
+		public string Name { get; set; } = string.Empty;
+		public string? Description { get; set; }
+		public System.Collections.Generic.List<string>? EnabledPlugins { get; set; }
 	}
 }
 
