@@ -74,8 +74,7 @@ public sealed class Plugin : IDalamudPlugin
         }
         else
         {
-            EnsureAlwaysOn();
-            Log.Info("Will check for default preset on character login");
+            Log.Info("Not logged in, will initialize on character login");
         }
 
         MainWindow = new MainWindow(this);
@@ -214,6 +213,23 @@ public sealed class Plugin : IDalamudPlugin
     {
         if (defaultPresetApplied)
             return;
+
+        if (PresetManager.UseAlwaysOnAsDefault)
+        {
+            defaultPresetApplied = true;
+            ClientState.Login -= OnLogin;
+
+            try
+            {
+                Log.Info("Auto-applying Always-On Only mode");
+                await PresetManager.ApplyAlwaysOnOnlyAsync();
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Failed to auto-apply Always-On Only mode");
+            }
+            return;
+        }
 
         var defaultPresetName = PresetManager.DefaultPreset;
         if (string.IsNullOrEmpty(defaultPresetName))

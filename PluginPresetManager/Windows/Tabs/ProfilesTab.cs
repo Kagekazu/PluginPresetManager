@@ -118,7 +118,10 @@ public class ProfilesTab
 
         if (isDefault)
         {
-            ImGui.TextColored(Colors.Star, FontAwesomeIcon.Star.ToIconString());
+            using (ImRaii.PushFont(UiBuilder.IconFont))
+            {
+                ImGui.TextColored(Colors.Star, FontAwesomeIcon.Star.ToIconString());
+            }
             ImGui.SameLine();
         }
 

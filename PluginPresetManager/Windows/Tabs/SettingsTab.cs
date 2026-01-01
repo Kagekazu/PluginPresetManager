@@ -25,6 +25,12 @@ public class SettingsTab
 
     public void Draw()
     {
+        if (!presetManager.HasCharacter)
+        {
+            ImGui.TextColored(Colors.Warning, "Please log in to a character to access settings.");
+            return;
+        }
+
         UIHelpers.SectionHeader("Notifications", FontAwesomeIcon.Bell);
 
         ImGui.SetNextItemWidth(Sizing.InputMedium);
@@ -33,6 +39,33 @@ public class SettingsTab
         {
             Data.NotificationMode = (NotificationMode)currentMode;
             plugin.CharacterStorage.Save(Data);
+        }
+
+        UIHelpers.VerticalSpacing(Sizing.SpacingLarge);
+
+        UIHelpers.SectionHeader("Login Behavior", FontAwesomeIcon.SignInAlt);
+
+        var useAlwaysOn = presetManager.UseAlwaysOnAsDefault;
+        if (ImGui.Checkbox("Apply Always-On Only on login", ref useAlwaysOn))
+        {
+            presetManager.SetAlwaysOnAsDefault(useAlwaysOn);
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip("On login, disable all plugins except those marked as always-on.");
+        }
+
+        if (!useAlwaysOn)
+        {
+            var defaultPreset = presetManager.DefaultPreset;
+            if (!string.IsNullOrEmpty(defaultPreset))
+            {
+                ImGui.TextColored(Colors.TextMuted, $"Default preset: {defaultPreset}");
+            }
+            else
+            {
+                ImGui.TextColored(Colors.TextMuted, "No default preset set. Set one in Manage tab.");
+            }
         }
 
         UIHelpers.VerticalSpacing(Sizing.SpacingLarge);

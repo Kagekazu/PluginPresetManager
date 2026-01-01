@@ -20,6 +20,8 @@ public class CharacterData
 
     public string? DefaultPreset { get; set; }
 
+    public bool UseAlwaysOnAsDefault { get; set; } = false;
+
     public string? LastAppliedPreset { get; set; }
 
     public NotificationMode NotificationMode { get; set; } = NotificationMode.Toast;

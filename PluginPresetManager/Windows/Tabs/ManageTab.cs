@@ -26,6 +26,7 @@ public class ManageTab
     private ulong importSourceCharacterId = 0;
 
     private Preset? presetToDelete = null;
+    private bool openDeleteModal = false;
 
     private Dictionary<string, IExposedPlugin>? cachedPlugins;
     private int lastPluginCount = -1;
@@ -43,16 +44,37 @@ public class ManageTab
         var currentCount = Plugin.PluginInterface.InstalledPlugins.Count();
         if (cachedPlugins == null || lastPluginCount != currentCount)
         {
-            cachedPlugins = Plugin.PluginInterface.InstalledPlugins
-                .GroupBy(p => p.InternalName)
-                .ToDictionary(g => g.Key, g => g.First());
+            cachedPlugins = new Dictionary<string, IExposedPlugin>();
+            foreach (var p in Plugin.PluginInterface.InstalledPlugins)
+            {
+                var key = GetPluginKey(p);
+                cachedPlugins[key] = p;
+            }
             lastPluginCount = currentCount;
         }
         return cachedPlugins;
     }
 
+    private static string GetPluginKey(IExposedPlugin plugin)
+    {
+        return plugin.IsDev ? $"{plugin.InternalName}#dev" : plugin.InternalName;
+    }
+
+    private static bool IsDevKey(string key) => key.EndsWith("#dev");
+
+    private static string GetInternalNameFromKey(string key)
+    {
+        return key.EndsWith("#dev") ? key[..^4] : key;
+    }
+
     public void Draw()
     {
+        if (!presetManager.HasCharacter)
+        {
+            ImGui.TextColored(Colors.Warning, "Please log in to a character to manage presets.");
+            return;
+        }
+
         DrawTopBar();
 
         ImGui.Separator();
@@ -77,6 +99,12 @@ public class ManageTab
 
     private void DrawDeleteConfirmation()
     {
+        if (openDeleteModal && presetToDelete != null)
+        {
+            UIHelpers.OpenConfirmationModal("DeletePreset", "Delete Preset");
+            openDeleteModal = false;
+        }
+
         if (presetToDelete != null)
         {
             var result = UIHelpers.ConfirmationModal(
@@ -104,9 +132,15 @@ public class ManageTab
         ImGui.InputTextWithHint("##NewPreset", "New preset name...", ref newPresetName, 100);
 
         ImGui.SameLine();
-        if (UIHelpers.IconButton(FontAwesomeIcon.Plus, "Create", "Create new preset", Sizing.ButtonSmall))
+        if (UIHelpers.IconButton(FontAwesomeIcon.Plus, "Create", "Create empty preset", Sizing.ButtonSmall))
         {
             CreatePreset();
+        }
+
+        ImGui.SameLine();
+        if (UIHelpers.IconButton(FontAwesomeIcon.Save, "AddEnabled", "Add currently enabled plugins as preset", Sizing.ButtonSmall))
+        {
+            CreatePresetFromCurrent();
         }
 
         ImGui.SameLine();
@@ -147,20 +181,10 @@ public class ManageTab
             ImGui.Text("Import preset from:");
             ImGui.SameLine();
 
-            var sources = new List<(string name, ulong id)>();
-
-            if (presetManager.CurrentCharacterId != CharacterStorage.GlobalContentId)
-            {
-                sources.Add(("Global", CharacterStorage.GlobalContentId));
-            }
-
-            foreach (var c in presetManager.GetAllCharacters())
-            {
-                if (c.ContentId != presetManager.CurrentCharacterId)
-                {
-                    sources.Add((c.DisplayName, c.ContentId));
-                }
-            }
+            var sources = presetManager.GetAllCharacters()
+                .Where(c => c.ContentId != presetManager.CurrentCharacterId)
+                .Select(c => (c.DisplayName, c.ContentId))
+                .ToList();
 
             if (sources.Count == 0)
             {
@@ -172,12 +196,12 @@ public class ManageTab
                 return;
             }
 
-            if (!sources.Any(s => s.id == importSourceCharacterId))
+            if (!sources.Any(s => s.ContentId == importSourceCharacterId))
             {
-                importSourceCharacterId = sources[0].id;
+                importSourceCharacterId = sources[0].ContentId;
             }
 
-            var currentSourceName = sources.First(s => s.id == importSourceCharacterId).name;
+            var currentSourceName = sources.First(s => s.ContentId == importSourceCharacterId).DisplayName;
 
             ImGui.SetNextItemWidth(150);
             if (ImGui.BeginCombo("##SourceChar", currentSourceName))
@@ -194,9 +218,7 @@ public class ManageTab
 
             ImGui.Spacing();
 
-            var sourceData = importSourceCharacterId == CharacterStorage.GlobalContentId
-                ? plugin.CharacterStorage.GetGlobal()
-                : plugin.CharacterStorage.GetCharacter(importSourceCharacterId);
+            var sourceData = plugin.CharacterStorage.GetCharacter(importSourceCharacterId);
 
             if (sourceData != null && sourceData.Presets.Count > 0)
             {
@@ -241,6 +263,16 @@ public class ManageTab
         showAlwaysOn = false;
     }
 
+    private void CreatePresetFromCurrent()
+    {
+        var name = string.IsNullOrWhiteSpace(newPresetName) ? "New Preset" : newPresetName;
+        var newPreset = presetManager.CreatePresetFromCurrent(name);
+        presetManager.AddPreset(newPreset);
+        selectedPreset = newPreset;
+        newPresetName = string.Empty;
+        showAlwaysOn = false;
+    }
+
     private void DrawLeftPanel()
     {
         UIHelpers.SectionHeader("Presets", FontAwesomeIcon.LayerGroup);
@@ -252,7 +284,10 @@ public class ManageTab
 
             if (isDefault)
             {
-                ImGui.TextColored(Colors.Star, FontAwesomeIcon.Star.ToIconString());
+                using (ImRaii.PushFont(UiBuilder.IconFont))
+                {
+                    ImGui.TextColored(Colors.Star, FontAwesomeIcon.Star.ToIconString());
+                }
                 ImGui.SameLine();
             }
 
@@ -271,7 +306,16 @@ public class ManageTab
         var alwaysOnPlugins = presetManager.GetAlwaysOnPlugins();
         UIHelpers.SectionHeader($"Always-On ({alwaysOnPlugins.Count})", FontAwesomeIcon.Lock);
 
-        if (ImGui.Selectable("Manage Always-On...", showAlwaysOn))
+        if (presetManager.UseAlwaysOnAsDefault)
+        {
+            using (ImRaii.PushFont(UiBuilder.IconFont))
+            {
+                ImGui.TextColored(Colors.Star, FontAwesomeIcon.Star.ToIconString());
+            }
+            ImGui.SameLine();
+        }
+
+        if (ImGui.Selectable("Always-On...", showAlwaysOn))
         {
             showAlwaysOn = true;
             selectedPreset = null;
@@ -295,7 +339,7 @@ public class ManageTab
         if (ImGui.MenuItem("Delete"))
         {
             presetToDelete = preset;
-            UIHelpers.OpenConfirmationModal("DeletePreset", "Delete Preset");
+            openDeleteModal = true;
         }
     }
 
@@ -445,10 +489,15 @@ public class ManageTab
                     ImGui.Checkbox($"##{pluginName}_ao", ref check);
                 }
                 ImGui.SameLine();
-                var displayName = installedPlugins.TryGetValue(pluginName, out var info)
-                    ? info.Name
-                    : $"{pluginName} (not installed)";
-                ImGui.TextColored(Colors.TextMuted, displayName);
+                if (installedPlugins.TryGetValue(pluginName, out var info))
+                {
+                    ImGui.TextColored(Colors.TextMuted, info.Name);
+                    DrawPluginTags(info);
+                }
+                else
+                {
+                    ImGui.TextColored(Colors.TextMuted, $"{pluginName} (not installed)");
+                }
             }
             if (anyAlwaysOnShown)
             {
@@ -461,19 +510,19 @@ public class ManageTab
         ImGui.TextColored(Colors.Header, "Preset Plugins");
 
         var anyPluginsShown = false;
-        foreach (var p in installedPlugins.Values.OrderBy(p => p.Name))
+        foreach (var (key, p) in installedPlugins.OrderBy(kv => kv.Value.Name).ThenBy(kv => kv.Key))
         {
-            if (alwaysOnPlugins.Contains(p.InternalName)) continue;
-            if (!MatchesFilter(p.InternalName, installedPlugins)) continue;
+            if (alwaysOnPlugins.Contains(key) || alwaysOnPlugins.Contains(p.InternalName)) continue;
+            if (!MatchesFilter(key, installedPlugins)) continue;
 
             anyPluginsShown = true;
-            var isInPreset = preset.Plugins.Contains(p.InternalName);
-            if (ImGui.Checkbox($"{p.Name}##{p.InternalName}", ref isInPreset))
+            var isInPreset = preset.Plugins.Contains(key);
+            if (ImGui.Checkbox($"{p.Name}##{key}", ref isInPreset))
             {
                 if (isInPreset)
-                    preset.Plugins.Add(p.InternalName);
+                    preset.Plugins.Add(key);
                 else
-                    preset.Plugins.Remove(p.InternalName);
+                    preset.Plugins.Remove(key);
                 presetManager.UpdatePreset(preset);
             }
 
@@ -494,6 +543,31 @@ public class ManageTab
 
         UIHelpers.VerticalSpacing(Sizing.SpacingMedium);
 
+        var isDefault = presetManager.UseAlwaysOnAsDefault;
+        if (isDefault)
+        {
+            using (ImRaii.PushColor(ImGuiCol.Button, new Vector4(0.3f, 0.3f, 0.1f, 1f)))
+            {
+                if (ImGui.Button("★ Default", new Vector2(Sizing.ButtonLarge, 0)))
+                {
+                    presetManager.SetAlwaysOnAsDefault(false);
+                }
+            }
+        }
+        else
+        {
+            if (ImGui.Button("Set Default", new Vector2(Sizing.ButtonLarge, 0)))
+            {
+                presetManager.SetAlwaysOnAsDefault(true);
+            }
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip(isDefault ? "Click to unset" : "Auto-apply on login (disables all except always-on)");
+        }
+
+        UIHelpers.VerticalSpacing(Sizing.SpacingMedium);
+
         ImGui.Text("Search");
         ImGui.SameLine();
         ImGui.SetNextItemWidth(Sizing.InputMedium);
@@ -511,23 +585,24 @@ public class ManageTab
         if (!child) return;
 
         var anyPluginsShown = false;
-        foreach (var p in installedPlugins.Values.OrderBy(p => p.Name))
+        foreach (var (key, p) in installedPlugins.OrderBy(kv => kv.Value.Name).ThenBy(kv => kv.Key))
         {
-            if (!MatchesFilter(p.InternalName, installedPlugins)) continue;
+            if (!MatchesFilter(key, installedPlugins)) continue;
 
             anyPluginsShown = true;
-            var isAlwaysOn = alwaysOnPlugins.Contains(p.InternalName);
-            var isThisPlugin = p.InternalName == thisPluginName;
+            var isAlwaysOn = alwaysOnPlugins.Contains(key);
+            var isThisPlugin = p.InternalName == thisPluginName && !p.IsDev;
 
             if (isThisPlugin)
             {
                 using (ImRaii.Disabled())
                 {
                     var check = true;
-                    ImGui.Checkbox($"##{p.InternalName}_ao", ref check);
+                    ImGui.Checkbox($"##{key}_ao", ref check);
                 }
                 ImGui.SameLine();
                 ImGui.Text(p.Name);
+                DrawPluginTags(p);
                 ImGui.SameLine();
                 using (ImRaii.PushColor(ImGuiCol.Text, Colors.Warning))
                 {
@@ -536,16 +611,15 @@ public class ManageTab
             }
             else
             {
-                if (ImGui.Checkbox($"{p.Name}##{p.InternalName}_ao", ref isAlwaysOn))
+                if (ImGui.Checkbox($"{p.Name}##{key}_ao", ref isAlwaysOn))
                 {
                     if (isAlwaysOn)
-                        presetManager.AddAlwaysOnPlugin(p.InternalName);
+                        presetManager.AddAlwaysOnPlugin(key);
                     else
-                        presetManager.RemoveAlwaysOnPlugin(p.InternalName);
+                        presetManager.RemoveAlwaysOnPlugin(key);
                 }
+                DrawPluginTags(p);
             }
-
-            DrawPluginTags(p);
         }
 
         if (!anyPluginsShown && !string.IsNullOrEmpty(searchFilter))
@@ -589,11 +663,13 @@ public class ManageTab
         var added = 0;
         foreach (var p in Plugin.PluginInterface.InstalledPlugins)
         {
+            var key = GetPluginKey(p);
             if (p.IsLoaded &&
-                !preset.Plugins.Contains(p.InternalName) &&
+                !preset.Plugins.Contains(key) &&
+                !alwaysOn.Contains(key) &&
                 !alwaysOn.Contains(p.InternalName))
             {
-                preset.Plugins.Add(p.InternalName);
+                preset.Plugins.Add(key);
                 added++;
             }
         }

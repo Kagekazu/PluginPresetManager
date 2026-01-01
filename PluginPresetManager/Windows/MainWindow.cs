@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using Dalamud.Interface.Windowing;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility.Raii;
 using PluginPresetManager.Models;
+using PluginPresetManager.UI;
 
 namespace PluginPresetManager.Windows;
 
@@ -95,19 +97,27 @@ public class MainWindow : Window, IDisposable
 
     private void DrawHeader()
     {
+        if (!presetManager.HasCharacter)
+        {
+            ImGui.TextColored(Colors.Warning, "Please log in to a character to use presets.");
+            return;
+        }
+
         var characters = presetManager.GetAllCharacters();
         var currentId = presetManager.CurrentCharacterId;
 
-        var items = new List<(string name, ulong id)> { ("Global", CharacterStorage.GlobalContentId) };
-        foreach (var c in characters)
+        if (characters.Count <= 1)
         {
-            items.Add((c.DisplayName, c.ContentId));
+            ImGui.Text($"Character: {presetManager.CurrentData.DisplayName}");
+            return;
         }
+
+        var items = characters.Select(c => (c.DisplayName, c.ContentId)).ToList();
 
         var currentIndex = 0;
         for (var i = 0; i < items.Count; i++)
         {
-            if (items[i].id == currentId)
+            if (items[i].ContentId == currentId)
             {
                 currentIndex = i;
                 break;
@@ -118,24 +128,24 @@ public class MainWindow : Window, IDisposable
         ImGui.SameLine();
         ImGui.SetNextItemWidth(200);
 
-        if (ImGui.BeginCombo("##CharSelect", items[currentIndex].name))
+        if (ImGui.BeginCombo("##CharSelect", items[currentIndex].DisplayName))
         {
             for (var i = 0; i < items.Count; i++)
             {
                 var isSelected = i == currentIndex;
-                var isCurrent = items[i].id == Plugin.PlayerState.ContentId;
+                var isCurrent = items[i].ContentId == Plugin.PlayerState.ContentId;
 
-                var label = items[i].name;
-                if (isCurrent && items[i].id != CharacterStorage.GlobalContentId)
+                var label = items[i].DisplayName;
+                if (isCurrent)
                 {
                     label += " (you)";
                 }
 
                 if (ImGui.Selectable(label, isSelected))
                 {
-                    if (items[i].id != currentId)
+                    if (items[i].ContentId != currentId)
                     {
-                        presetManager.SwitchCharacter(items[i].id);
+                        presetManager.SwitchCharacter(items[i].ContentId);
                         plugin.SaveConfiguration();
                     }
                 }

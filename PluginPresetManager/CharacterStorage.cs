@@ -13,47 +13,35 @@ public class CharacterStorage
 {
     private readonly IPluginLog log;
     private readonly string baseDirectory;
-    private readonly string globalFilePath;
     private readonly string charactersDirectory;
 
-    private CharacterData globalData = new();
     private Dictionary<ulong, CharacterData> characters = new();
-
-    public const ulong GlobalContentId = 0;
+    private CharacterData? pendingMigrationData;
 
     public CharacterStorage(IDalamudPluginInterface pluginInterface, IPluginLog log)
     {
         this.log = log;
 
         baseDirectory = pluginInterface.ConfigDirectory.FullName;
-        globalFilePath = Path.Combine(baseDirectory, "global.json");
         charactersDirectory = Path.Combine(baseDirectory, "characters");
 
         Directory.CreateDirectory(charactersDirectory);
 
-        MigrateIfNeeded();
         LoadAll();
+        CheckForPendingMigration();
 
         log.Info($"CharacterStorage initialized at: {baseDirectory}");
     }
 
     #region Public API
 
-    public CharacterData GetGlobal() => globalData;
-
-    public CharacterData GetCharacter(ulong contentId)
+    public CharacterData? GetCharacter(ulong contentId)
     {
-        if (contentId == GlobalContentId)
-            return globalData;
-
-        return characters.TryGetValue(contentId, out var data) ? data : null!;
+        return characters.TryGetValue(contentId, out var data) ? data : null;
     }
 
     public CharacterData GetOrCreateCharacter(ulong contentId, string name, string world)
     {
-        if (contentId == GlobalContentId)
-            return globalData;
-
         if (characters.TryGetValue(contentId, out var existing))
         {
             var oldFileName = existing.FileName;
@@ -61,7 +49,6 @@ public class CharacterStorage
             existing.World = world;
             existing.LastSeen = DateTime.Now;
 
-            // Rename file if name changed
             if (oldFileName != existing.FileName)
             {
                 var oldPath = Path.Combine(charactersDirectory, $"{oldFileName}.json");
@@ -82,6 +69,25 @@ public class CharacterStorage
             World = world,
             LastSeen = DateTime.Now
         };
+
+        // Apply pending migration data to this character
+        if (pendingMigrationData != null)
+        {
+            log.Info($"Applying pending migration data to {name}");
+            foreach (var preset in pendingMigrationData.Presets)
+            {
+                newData.Presets.Add(preset);
+            }
+            foreach (var plugin in pendingMigrationData.AlwaysOn)
+            {
+                newData.AlwaysOn.Add(plugin);
+            }
+            newData.NotificationMode = pendingMigrationData.NotificationMode;
+
+            pendingMigrationData = null;
+            MarkMigrationComplete();
+        }
+
         characters[contentId] = newData;
         Save(newData);
         log.Info($"Created new character data: {name} @ {world}");
@@ -99,16 +105,7 @@ public class CharacterStorage
     {
         try
         {
-            string filePath;
-            if (data.ContentId == GlobalContentId)
-            {
-                filePath = globalFilePath;
-            }
-            else
-            {
-                filePath = Path.Combine(charactersDirectory, $"{data.FileName}.json");
-            }
-
+            var filePath = Path.Combine(charactersDirectory, $"{data.FileName}.json");
             var json = JsonConvert.SerializeObject(data, Formatting.Indented);
             File.WriteAllText(filePath, json);
         }
@@ -120,8 +117,6 @@ public class CharacterStorage
 
     public void DeleteCharacter(ulong contentId)
     {
-        if (contentId == GlobalContentId) return;
-
         if (characters.TryGetValue(contentId, out var data))
         {
             var filePath = Path.Combine(charactersDirectory, $"{data.FileName}.json");
@@ -136,7 +131,7 @@ public class CharacterStorage
 
     public Preset? CopyPresetFromCharacter(ulong sourceContentId, string presetName)
     {
-        var sourceData = sourceContentId == GlobalContentId ? globalData : characters.GetValueOrDefault(sourceContentId);
+        var sourceData = characters.GetValueOrDefault(sourceContentId);
         if (sourceData == null) return null;
 
         var sourcePreset = sourceData.Presets.FirstOrDefault(p => p.Name == presetName);
@@ -158,23 +153,20 @@ public class CharacterStorage
 
     private void LoadAll()
     {
-        globalData = LoadFile(globalFilePath) ?? new CharacterData { ContentId = GlobalContentId, Name = "Global" };
-        globalData.ContentId = GlobalContentId;
-
         characters.Clear();
         if (Directory.Exists(charactersDirectory))
         {
             foreach (var file in Directory.GetFiles(charactersDirectory, "*.json"))
             {
                 var data = LoadFile(file);
-                if (data != null && data.ContentId != GlobalContentId)
+                if (data != null && data.ContentId != 0)
                 {
                     characters[data.ContentId] = data;
                 }
             }
         }
 
-        log.Info($"Loaded global data and {characters.Count} character(s)");
+        log.Info($"Loaded {characters.Count} character(s)");
     }
 
     private CharacterData? LoadFile(string filePath)
@@ -197,16 +189,32 @@ public class CharacterStorage
 
     #region Migration
 
-    private void MigrateIfNeeded()
+    private void CheckForPendingMigration()
     {
         var migrationMarker = Path.Combine(baseDirectory, "v2_migrated");
         if (File.Exists(migrationMarker)) return;
 
         log.Info("Checking for data to migrate...");
 
+        pendingMigrationData = new CharacterData();
+
         MigrateFromCurrentStructure();
         MigrateFromLegacyStructure();
 
+        if (pendingMigrationData.Presets.Count == 0 && pendingMigrationData.AlwaysOn.Count == 0)
+        {
+            pendingMigrationData = null;
+            MarkMigrationComplete();
+        }
+        else
+        {
+            log.Info($"Found {pendingMigrationData.Presets.Count} presets and {pendingMigrationData.AlwaysOn.Count} always-on plugins pending migration");
+        }
+    }
+
+    private void MarkMigrationComplete()
+    {
+        var migrationMarker = Path.Combine(baseDirectory, "v2_migrated");
         File.WriteAllText(migrationMarker, DateTime.Now.ToString("o"));
         log.Info("Migration complete");
     }
@@ -216,18 +224,45 @@ public class CharacterStorage
         var globalDir = Path.Combine(baseDirectory, "global");
         var charsDir = Path.Combine(baseDirectory, "characters");
         var charsFile = Path.Combine(baseDirectory, "characters.json");
+        var globalFile = Path.Combine(baseDirectory, "global.json");
 
-        if (Directory.Exists(globalDir))
+        // Migrate old global.json to pending
+        if (File.Exists(globalFile))
         {
-            var data = MigrateCharacterFolder(globalDir, GlobalContentId, "Global", "");
-            if (data != null)
+            var globalData = LoadFile(globalFile);
+            if (globalData != null)
             {
-                globalData = data;
-                Save(globalData);
-                log.Info("Migrated global data from folder structure");
+                foreach (var preset in globalData.Presets)
+                {
+                    pendingMigrationData!.Presets.Add(preset);
+                }
+                foreach (var plugin in globalData.AlwaysOn)
+                {
+                    pendingMigrationData!.AlwaysOn.Add(plugin);
+                }
+                log.Info("Migrated global.json to pending");
             }
         }
 
+        // Migrate old global folder to pending
+        if (Directory.Exists(globalDir))
+        {
+            var data = MigrateCharacterFolder(globalDir);
+            if (data != null)
+            {
+                foreach (var preset in data.Presets)
+                {
+                    pendingMigrationData!.Presets.Add(preset);
+                }
+                foreach (var plugin in data.AlwaysOn)
+                {
+                    pendingMigrationData!.AlwaysOn.Add(plugin);
+                }
+                log.Info("Migrated global folder to pending");
+            }
+        }
+
+        // Load character info from old characters.json
         Dictionary<ulong, (string name, string world)> charInfo = new();
         if (File.Exists(charsFile))
         {
@@ -249,17 +284,21 @@ public class CharacterStorage
             }
         }
 
+        // Migrate character folders (old structure with contentId as folder name)
         if (Directory.Exists(charsDir))
         {
             foreach (var dir in Directory.GetDirectories(charsDir))
             {
                 var folderName = Path.GetFileName(dir);
-                if (ulong.TryParse(folderName, out var contentId) && contentId != GlobalContentId)
+                if (ulong.TryParse(folderName, out var contentId) && contentId != 0)
                 {
                     var (name, world) = charInfo.GetValueOrDefault(contentId, ($"Character_{contentId}", ""));
-                    var data = MigrateCharacterFolder(dir, contentId, name, world);
+                    var data = MigrateCharacterFolder(dir);
                     if (data != null)
                     {
+                        data.ContentId = contentId;
+                        data.Name = name;
+                        data.World = world;
                         characters[contentId] = data;
                         Save(data);
                         log.Info($"Migrated character: {name}");
@@ -269,19 +308,13 @@ public class CharacterStorage
         }
     }
 
-    private CharacterData? MigrateCharacterFolder(string folderPath, ulong contentId, string name, string world)
+    private CharacterData? MigrateCharacterFolder(string folderPath)
     {
         var presetsDir = Path.Combine(folderPath, "presets");
         var alwaysOnPath = Path.Combine(folderPath, "always-on.json");
         var configPath = Path.Combine(folderPath, "config.json");
 
-        var data = new CharacterData
-        {
-            ContentId = contentId,
-            Name = name,
-            World = world,
-            LastSeen = DateTime.Now
-        };
+        var data = new CharacterData { LastSeen = DateTime.Now };
 
         if (Directory.Exists(presetsDir))
         {
@@ -380,13 +413,7 @@ public class CharacterStorage
         if (!Directory.Exists(legacyPresetsDir) && !File.Exists(legacyAlwaysOnPath))
             return;
 
-        log.Info("Found legacy structure, migrating to global...");
-
-        if (globalData.Presets.Count > 0 || globalData.AlwaysOn.Count > 0)
-        {
-            log.Info("Global already has data, skipping legacy migration");
-            return;
-        }
+        log.Info("Found legacy structure, adding to pending migration...");
 
         if (Directory.Exists(legacyPresetsDir))
         {
@@ -398,7 +425,7 @@ public class CharacterStorage
                     var oldPreset = JsonConvert.DeserializeObject<PresetLegacy>(json);
                     if (oldPreset != null)
                     {
-                        globalData.Presets.Add(new Preset
+                        pendingMigrationData!.Presets.Add(new Preset
                         {
                             Name = oldPreset.Name,
                             Description = oldPreset.Description ?? "",
@@ -420,7 +447,14 @@ public class CharacterStorage
             try
             {
                 var json = File.ReadAllText(legacyAlwaysOnPath);
-                globalData.AlwaysOn = JsonConvert.DeserializeObject<HashSet<string>>(json) ?? new HashSet<string>();
+                var alwaysOn = JsonConvert.DeserializeObject<HashSet<string>>(json);
+                if (alwaysOn != null)
+                {
+                    foreach (var plugin in alwaysOn)
+                    {
+                        pendingMigrationData!.AlwaysOn.Add(plugin);
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -428,11 +462,7 @@ public class CharacterStorage
             }
         }
 
-        if (globalData.Presets.Count > 0 || globalData.AlwaysOn.Count > 0)
-        {
-            Save(globalData);
-            log.Info($"Migrated {globalData.Presets.Count} presets and {globalData.AlwaysOn.Count} always-on plugins from legacy structure");
-        }
+        log.Info($"Added {pendingMigrationData!.Presets.Count} presets from legacy structure");
     }
 
     #endregion
