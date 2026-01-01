@@ -11,6 +11,9 @@ namespace PluginPresetManager;
 
 public class PresetManager
 {
+    private const int DelayBetweenCommands = 50;
+    private const int PluginStateCheckInterval = 500;
+
     private readonly IDalamudPluginInterface pluginInterface;
     private readonly ICommandManager commandManager;
     private readonly IChatGui chatGui;
@@ -221,8 +224,8 @@ public class PresetManager
                 var isDisabled = false;
                 while (!isDisabled && waitedMs < maxWaitMs)
                 {
-                    await Task.Delay(characterConfig.PluginStateCheckInterval);
-                    waitedMs += characterConfig.PluginStateCheckInterval;
+                    await Task.Delay(PluginStateCheckInterval);
+                    waitedMs += PluginStateCheckInterval;
 
                     var currentPlugin = pluginInterface.InstalledPlugins
                         .FirstOrDefault(p => p.InternalName == plugin.InternalName);
@@ -239,7 +242,7 @@ public class PresetManager
                     log.Warning($"Plugin {plugin.Name} did not disable within timeout (waited {waitedMs}ms)");
                 }
 
-                await Task.Delay(characterConfig.DelayBetweenCommands);
+                await Task.Delay(DelayBetweenCommands);
             }
 
             progress?.Report($"Enabling {toEnable.Count} always-on plugins...");
@@ -256,8 +259,8 @@ public class PresetManager
                 var isEnabled = false;
                 while (!isEnabled && waitedMs < maxWaitMs)
                 {
-                    await Task.Delay(characterConfig.PluginStateCheckInterval);
-                    waitedMs += characterConfig.PluginStateCheckInterval;
+                    await Task.Delay(PluginStateCheckInterval);
+                    waitedMs += PluginStateCheckInterval;
 
                     var currentPlugin = pluginInterface.InstalledPlugins
                         .FirstOrDefault(p => p.InternalName == pluginName);
@@ -274,7 +277,7 @@ public class PresetManager
                     log.Warning($"Plugin {plugin.Name} did not enable within timeout (waited {waitedMs}ms)");
                 }
 
-                await Task.Delay(characterConfig.DelayBetweenCommands);
+                await Task.Delay(DelayBetweenCommands);
             }
 
             characterConfig.LastAppliedPresetId = null;
@@ -398,8 +401,8 @@ public class PresetManager
                 var isDisabled = false;
                 while (!isDisabled && waitedMs < maxWaitMs)
                 {
-                    await Task.Delay(characterConfig.PluginStateCheckInterval);
-                    waitedMs += characterConfig.PluginStateCheckInterval;
+                    await Task.Delay(PluginStateCheckInterval);
+                    waitedMs += PluginStateCheckInterval;
 
                     var currentPlugin = pluginInterface.InstalledPlugins
                         .FirstOrDefault(p => p.InternalName == plugin.InternalName);
@@ -416,7 +419,7 @@ public class PresetManager
                     log.Warning($"Plugin {plugin.Name} did not disable within timeout (waited {waitedMs}ms)");
                 }
 
-                await Task.Delay(characterConfig.DelayBetweenCommands);
+                await Task.Delay(DelayBetweenCommands);
             }
 
             progress?.Report($"Enabling {toEnable.Count} plugins...");
@@ -433,8 +436,8 @@ public class PresetManager
                 var isEnabled = false;
                 while (!isEnabled && waitedMs < maxWaitMs)
                 {
-                    await Task.Delay(characterConfig.PluginStateCheckInterval);
-                    waitedMs += characterConfig.PluginStateCheckInterval;
+                    await Task.Delay(PluginStateCheckInterval);
+                    waitedMs += PluginStateCheckInterval;
 
                     var currentPlugin = pluginInterface.InstalledPlugins
                         .FirstOrDefault(p => p.InternalName == pluginName);
@@ -451,7 +454,7 @@ public class PresetManager
                     log.Warning($"Plugin {plugin.Name} did not enable within timeout (waited {waitedMs}ms)");
                 }
 
-                await Task.Delay(characterConfig.DelayBetweenCommands);
+                await Task.Delay(DelayBetweenCommands);
             }
 
             characterConfig.LastAppliedPresetId = preset.Id;
@@ -722,13 +725,13 @@ public class PresetManager
                 {
                     ApplyingStatus = $"Enabling {plugin.Name}...";
                     commandManager.ProcessCommand($"/xlenableplugin \"{plugin.Name}\"");
-                    await Task.Delay(characterConfig.DelayBetweenCommands);
+                    await Task.Delay(DelayBetweenCommands);
                 }
                 else if (!wasLoaded && plugin.IsLoaded)
                 {
                     ApplyingStatus = $"Disabling {plugin.Name}...";
                     commandManager.ProcessCommand($"/xldisableplugin \"{plugin.Name}\"");
-                    await Task.Delay(characterConfig.DelayBetweenCommands);
+                    await Task.Delay(DelayBetweenCommands);
                 }
             }
 

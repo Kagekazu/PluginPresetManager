@@ -400,9 +400,6 @@ public class CharacterStorage
         {
             ContentId = targetContentId,
             NotificationMode = sourceConfig.NotificationMode,
-            DelayBetweenCommands = sourceConfig.DelayBetweenCommands,
-            PluginStateCheckInterval = sourceConfig.PluginStateCheckInterval,
-            // Don't copy preset IDs as they're different
         };
         SaveCharacterConfig(targetContentId, targetConfig);
 

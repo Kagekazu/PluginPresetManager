@@ -12,8 +12,4 @@ public class CharacterConfig
     public Guid? LastAppliedPresetId { get; set; }
 
     public NotificationMode NotificationMode { get; set; } = NotificationMode.Toast;
-
-    public int DelayBetweenCommands { get; set; } = 50;
-
-    public int PluginStateCheckInterval { get; set; } = 1000;
 }
