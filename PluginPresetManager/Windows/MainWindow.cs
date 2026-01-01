@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Interface.Windowing;
@@ -11,36 +12,28 @@ namespace PluginPresetManager.Windows;
 public class MainWindow : Window, IDisposable
 {
     private readonly Plugin plugin;
-    private readonly Configuration config;
     private readonly PresetManager presetManager;
 
-    
-    private readonly PluginPresetManager.Windows.Tabs.PresetsTab presetsTab;
-    private readonly PluginPresetManager.Windows.Tabs.AlwaysOnTab alwaysOnTab;
-    private readonly PluginPresetManager.Windows.Tabs.AllPluginsTab allPluginsTab;
-    private readonly PluginPresetManager.Windows.Tabs.HelpTab helpTab;
-    private readonly PluginPresetManager.Windows.Tabs.SettingsTab settingsTab;
+    private readonly Tabs.ProfilesTab profilesTab;
+    private readonly Tabs.ManageTab manageTab;
+    private readonly Tabs.SettingsTab settingsTab;
+    private readonly Tabs.HelpTab helpTab;
 
     private bool focusSettingsTabNextDraw = false;
-
-    
 
     public MainWindow(Plugin plugin)
         : base("Plugin Preset Manager###PluginPresetManager")
     {
-        Size = new Vector2(600, 480);
+        Size = new Vector2(550, 450);
         SizeCondition = ImGuiCond.FirstUseEver;
 
         this.plugin = plugin;
-        this.config = plugin.Configuration;
         this.presetManager = plugin.PresetManager;
 
-        
-        presetsTab = new PluginPresetManager.Windows.Tabs.PresetsTab(plugin, config, presetManager);
-        alwaysOnTab = new PluginPresetManager.Windows.Tabs.AlwaysOnTab(plugin, presetManager);
-        allPluginsTab = new PluginPresetManager.Windows.Tabs.AllPluginsTab(presetManager);
-        helpTab = new PluginPresetManager.Windows.Tabs.HelpTab();
-        settingsTab = new PluginPresetManager.Windows.Tabs.SettingsTab(config, presetManager);
+        profilesTab = new Tabs.ProfilesTab(presetManager);
+        manageTab = new Tabs.ManageTab(plugin, presetManager);
+        settingsTab = new Tabs.SettingsTab(plugin, presetManager);
+        helpTab = new Tabs.HelpTab();
     }
 
     public void Dispose() { }
@@ -53,45 +46,109 @@ public class MainWindow : Window, IDisposable
 
     public override void Draw()
     {
-        using (var tabBar = ImRaii.TabBar("PresetTabs###main_tabs"))
+        // Header: Character selector
+        DrawHeader();
+
+        ImGui.Spacing();
+
+        // Tabs
+        using (var tabBar = ImRaii.TabBar("MainTabs"))
         {
             if (!tabBar) return;
 
-            using (var tabItem = ImRaii.TabItem("Presets###tab_presets"))
+            using (var tab = ImRaii.TabItem("Profiles"))
             {
-                if (tabItem)
-                    presetsTab.Draw();
+                if (tab)
+                {
+                    ImGui.Spacing();
+                    profilesTab.Draw();
+                }
             }
 
-            using (var tabItem = ImRaii.TabItem("Always-On Plugins###tab_always"))
+            using (var tab = ImRaii.TabItem("Manage"))
             {
-                if (tabItem)
-                    alwaysOnTab.Draw();
-            }
-
-            using (var tabItem = ImRaii.TabItem("All Plugins###tab_all"))
-            {
-                if (tabItem)
-                    allPluginsTab.Draw();
-            }
-
-            using (var tabItem = ImRaii.TabItem("Help###tab_help"))
-            {
-                if (tabItem)
-                    helpTab.Draw();
+                if (tab)
+                {
+                    ImGui.Spacing();
+                    manageTab.Draw();
+                }
             }
 
             var settingsFlags = focusSettingsTabNextDraw ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None;
-            using (var tabItem = ImRaii.TabItem("Settings###tab_settings", settingsFlags))
+            using (var tab = ImRaii.TabItem("Settings", settingsFlags))
             {
-                if (tabItem)
+                if (tab)
                 {
                     if (focusSettingsTabNextDraw) focusSettingsTabNextDraw = false;
+                    ImGui.Spacing();
                     settingsTab.Draw();
+                }
+            }
+
+            using (var tab = ImRaii.TabItem("Help"))
+            {
+                if (tab)
+                {
+                    ImGui.Spacing();
+                    helpTab.Draw();
                 }
             }
         }
     }
 
-    
+    private void DrawHeader()
+    {
+        var characters = presetManager.GetAllCharacters();
+        var currentId = presetManager.CurrentCharacterId;
+
+        // Build character list
+        var items = new List<(string name, ulong id)> { ("Global", CharacterStorage.GlobalContentId) };
+        foreach (var c in characters)
+        {
+            items.Add((c.DisplayName, c.ContentId));
+        }
+
+        // Find current
+        var currentIndex = 0;
+        for (var i = 0; i < items.Count; i++)
+        {
+            if (items[i].id == currentId)
+            {
+                currentIndex = i;
+                break;
+            }
+        }
+
+        ImGui.Text("Character:");
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(200);
+
+        if (ImGui.BeginCombo("##CharSelect", items[currentIndex].name))
+        {
+            for (var i = 0; i < items.Count; i++)
+            {
+                var isSelected = i == currentIndex;
+                var isCurrent = items[i].id == Plugin.PlayerState.ContentId;
+
+                var label = items[i].name;
+                if (isCurrent && items[i].id != CharacterStorage.GlobalContentId)
+                {
+                    label += " (you)";
+                }
+
+                if (ImGui.Selectable(label, isSelected))
+                {
+                    if (items[i].id != currentId)
+                    {
+                        presetManager.SwitchCharacter(items[i].id);
+                        plugin.SaveConfiguration();
+                    }
+                }
+
+                if (isSelected)
+                    ImGui.SetItemDefaultFocus();
+            }
+            ImGui.EndCombo();
+        }
+    }
 }
