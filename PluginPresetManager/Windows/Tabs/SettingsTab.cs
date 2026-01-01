@@ -12,6 +12,7 @@ public class SettingsTab
 {
     private readonly Plugin plugin;
     private readonly PresetManager presetManager;
+    private CharacterData? characterToDelete = null;
 
     public SettingsTab(Plugin plugin, PresetManager presetManager)
     {
@@ -66,26 +67,62 @@ public class SettingsTab
         ImGui.TextColored(Colors.TextMuted, $"Presets (current): {presets.Count}");
         ImGui.TextColored(Colors.TextMuted, $"Always-On: {alwaysOn.Count}");
 
-        // Character management
         if (characters.Count > 0)
         {
             UIHelpers.VerticalSpacing(Sizing.SpacingLarge);
             UIHelpers.SectionHeader("Character Data", FontAwesomeIcon.Users);
 
-            foreach (var character in characters.OrderByDescending(c => c.LastSeen))
+            ImGui.TextColored(Colors.TextMuted, "Delete unused character data to clean up.");
+            ImGui.Spacing();
+
+            foreach (var character in characters.OrderBy(c => c.Name))
             {
                 ImGui.Text($"{character.DisplayName}");
                 ImGui.SameLine();
-                ImGui.TextColored(Colors.TextMuted, $"(last seen: {character.LastSeen:yyyy-MM-dd})");
+                ImGui.TextColored(Colors.TextMuted, $"({character.Presets.Count} presets)");
 
                 if (character.ContentId != presetManager.CurrentCharacterId)
                 {
                     ImGui.SameLine();
-                    if (ImGui.SmallButton($"Delete##{character.ContentId}"))
+                    using (ImRaii.PushColor(ImGuiCol.Button, new Vector4(0.5f, 0.2f, 0.2f, 1f)))
+                    using (ImRaii.PushColor(ImGuiCol.ButtonHovered, new Vector4(0.6f, 0.3f, 0.3f, 1f)))
                     {
-                        presetManager.DeleteCharacter(character.ContentId);
+                        if (ImGui.SmallButton($"Delete##{character.ContentId}"))
+                        {
+                            characterToDelete = character;
+                            UIHelpers.OpenConfirmationModal("DeleteCharacter", "Delete Character Data");
+                        }
                     }
                 }
+                else
+                {
+                    ImGui.SameLine();
+                    ImGui.TextColored(Colors.Active, "(current)");
+                }
+            }
+        }
+
+        DrawDeleteConfirmation();
+    }
+
+    private void DrawDeleteConfirmation()
+    {
+        if (characterToDelete != null)
+        {
+            var result = UIHelpers.ConfirmationModal(
+                "DeleteCharacter",
+                "Delete Character Data",
+                $"Delete all data for '{characterToDelete.DisplayName}'?\n\n" +
+                $"This will remove {characterToDelete.Presets.Count} preset(s) and cannot be undone.");
+
+            if (result == true)
+            {
+                presetManager.DeleteCharacter(characterToDelete.ContentId);
+                characterToDelete = null;
+            }
+            else if (result == false)
+            {
+                characterToDelete = null;
             }
         }
     }

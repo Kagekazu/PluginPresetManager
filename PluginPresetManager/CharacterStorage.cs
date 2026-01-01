@@ -56,7 +56,6 @@ public class CharacterStorage
 
         if (characters.TryGetValue(contentId, out var existing))
         {
-            // Update name/world in case of rename
             var oldFileName = existing.FileName;
             existing.Name = name;
             existing.World = world;
@@ -76,7 +75,6 @@ public class CharacterStorage
             return existing;
         }
 
-        // Create new
         var newData = new CharacterData
         {
             ContentId = contentId,
@@ -160,11 +158,9 @@ public class CharacterStorage
 
     private void LoadAll()
     {
-        // Load global
         globalData = LoadFile(globalFilePath) ?? new CharacterData { ContentId = GlobalContentId, Name = "Global" };
         globalData.ContentId = GlobalContentId;
 
-        // Load all character files
         characters.Clear();
         if (Directory.Exists(charactersDirectory))
         {
@@ -208,10 +204,7 @@ public class CharacterStorage
 
         log.Info("Checking for data to migrate...");
 
-        // Try migrate from current structure (global/ and characters/{contentId}/)
         MigrateFromCurrentStructure();
-
-        // Try migrate from legacy structure (presets/ and always-on.json in root)
         MigrateFromLegacyStructure();
 
         File.WriteAllText(migrationMarker, DateTime.Now.ToString("o"));
@@ -224,7 +217,6 @@ public class CharacterStorage
         var charsDir = Path.Combine(baseDirectory, "characters");
         var charsFile = Path.Combine(baseDirectory, "characters.json");
 
-        // Migrate global folder
         if (Directory.Exists(globalDir))
         {
             var data = MigrateCharacterFolder(globalDir, GlobalContentId, "Global", "");
@@ -236,7 +228,6 @@ public class CharacterStorage
             }
         }
 
-        // Load character info from characters.json
         Dictionary<ulong, (string name, string world)> charInfo = new();
         if (File.Exists(charsFile))
         {
@@ -258,7 +249,6 @@ public class CharacterStorage
             }
         }
 
-        // Migrate character folders
         if (Directory.Exists(charsDir))
         {
             foreach (var dir in Directory.GetDirectories(charsDir))
@@ -293,7 +283,6 @@ public class CharacterStorage
             LastSeen = DateTime.Now
         };
 
-        // Load presets
         if (Directory.Exists(presetsDir))
         {
             foreach (var file in Directory.GetFiles(presetsDir, "*.json"))
@@ -321,7 +310,6 @@ public class CharacterStorage
             }
         }
 
-        // Load always-on
         if (File.Exists(alwaysOnPath))
         {
             try
@@ -335,7 +323,6 @@ public class CharacterStorage
             }
         }
 
-        // Load config
         if (File.Exists(configPath))
         {
             try
@@ -344,12 +331,8 @@ public class CharacterStorage
                 var config = JsonConvert.DeserializeObject<CharacterConfigLegacy>(json);
                 if (config != null)
                 {
-                    // Convert GUID-based preset references to name-based
                     if (config.DefaultPresetId.HasValue)
                     {
-                        var preset = data.Presets.FirstOrDefault(p =>
-                            File.Exists(Path.Combine(presetsDir, $"*{config.DefaultPresetId.Value}.json")));
-                        // We'll match by reading all presets and finding the one with matching ID
                         data.DefaultPreset = FindPresetNameByGuid(presetsDir, config.DefaultPresetId.Value, data.Presets);
                     }
                     if (config.LastAppliedPresetId.HasValue)
@@ -370,8 +353,6 @@ public class CharacterStorage
 
     private string? FindPresetNameByGuid(string presetsDir, Guid id, List<Preset> presets)
     {
-        // The old format stored presets as "Name_GUID.json"
-        // Try to find a file matching this GUID
         if (!Directory.Exists(presetsDir)) return null;
 
         foreach (var file in Directory.GetFiles(presetsDir, $"*{id}.json"))
@@ -393,7 +374,6 @@ public class CharacterStorage
 
     private void MigrateFromLegacyStructure()
     {
-        // Original structure: presets/ and always-on.json in root
         var legacyPresetsDir = Path.Combine(baseDirectory, "presets");
         var legacyAlwaysOnPath = Path.Combine(baseDirectory, "always-on.json");
 
@@ -402,7 +382,6 @@ public class CharacterStorage
 
         log.Info("Found legacy structure, migrating to global...");
 
-        // Only migrate to global if global doesn't already have data
         if (globalData.Presets.Count > 0 || globalData.AlwaysOn.Count > 0)
         {
             log.Info("Global already has data, skipping legacy migration");

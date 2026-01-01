@@ -52,10 +52,8 @@ public sealed class Plugin : IDalamudPlugin
             Configuration,
             CharacterStorage);
 
-        // Always subscribe to login event
         ClientState.Login += OnLogin;
 
-        // If already logged in, handle it on the next frame (to avoid threading issues)
         if (ClientState.IsLoggedIn && PlayerState.ContentId != 0)
         {
             Framework.RunOnFrameworkThread(() =>
@@ -66,10 +64,8 @@ public sealed class Plugin : IDalamudPlugin
                 PresetManager.SwitchCharacter(PlayerState.ContentId, name, world);
                 Log.Info($"Already logged in as {name}, loaded character data");
 
-                // Ensure this plugin is always-on
                 EnsureAlwaysOn();
 
-                // Apply default preset if configured
                 if (!string.IsNullOrEmpty(PresetManager.DefaultPreset))
                 {
                     ApplyDefaultPreset();
@@ -78,7 +74,6 @@ public sealed class Plugin : IDalamudPlugin
         }
         else
         {
-            // Ensure always-on for global config
             EnsureAlwaysOn();
             Log.Info("Will check for default preset on character login");
         }
@@ -198,10 +193,8 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnLogin()
     {
-        // Run on framework thread to safely access LocalPlayer
         Framework.RunOnFrameworkThread(() =>
         {
-            // Switch to the logged-in character's data
             if (PlayerState.ContentId != 0)
             {
                 var localPlayer = ObjectTable.LocalPlayer;
@@ -210,7 +203,6 @@ public sealed class Plugin : IDalamudPlugin
                 PresetManager.SwitchCharacter(PlayerState.ContentId, name, world);
                 Log.Info($"Character logged in: {name} @ {world}");
 
-                // Ensure always-on for this character
                 EnsureAlwaysOn();
             }
 
@@ -218,7 +210,7 @@ public sealed class Plugin : IDalamudPlugin
         });
     }
 
-    private void ApplyDefaultPreset()
+    private async void ApplyDefaultPreset()
     {
         if (defaultPresetApplied)
             return;
@@ -227,19 +219,24 @@ public sealed class Plugin : IDalamudPlugin
         if (string.IsNullOrEmpty(defaultPresetName))
             return;
 
+        var defaultPreset = PresetManager.GetPresetByName(defaultPresetName);
+        if (defaultPreset == null)
+        {
+            Log.Warning($"Default preset '{defaultPresetName}' not found");
+            return;
+        }
+
         defaultPresetApplied = true;
         ClientState.Login -= OnLogin;
 
-        var defaultPreset = PresetManager.GetPresetByName(defaultPresetName);
-
-        if (defaultPreset != null)
+        try
         {
             Log.Info($"Auto-applying default preset: {defaultPreset.Name}");
-            _ = PresetManager.ApplyPresetAsync(defaultPreset);
+            await PresetManager.ApplyPresetAsync(defaultPreset);
         }
-        else
+        catch (Exception ex)
         {
-            Log.Warning($"Default preset '{defaultPresetName}' not found");
+            Log.Error(ex, $"Failed to auto-apply default preset '{defaultPreset.Name}'");
         }
     }
 

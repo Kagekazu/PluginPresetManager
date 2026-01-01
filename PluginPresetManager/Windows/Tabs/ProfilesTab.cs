@@ -23,26 +23,22 @@ public class ProfilesTab
         var alwaysOnCount = presetManager.GetAlwaysOnPlugins().Count;
         var lastApplied = presetManager.GetLastAppliedPreset();
 
-        // Status text if applying
         if (presetManager.IsApplying)
         {
             DrawApplyingStatus();
             return;
         }
 
-        // Header
         DrawHeader(lastApplied);
 
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
 
-        // Always-On Only option
         DrawAlwaysOnOnlyOption(alwaysOnCount, lastApplied == null);
 
         UIHelpers.VerticalSpacing(Sizing.SpacingLarge);
 
-        // Presets section
         UIHelpers.SectionHeader("Presets", FontAwesomeIcon.LayerGroup);
 
         if (presets.Count == 0)
@@ -117,18 +113,15 @@ public class ProfilesTab
         var alwaysOnCount = presetManager.GetAlwaysOnPlugins().Count;
         var totalPlugins = pluginCount + alwaysOnCount;
 
-        // Status dot
         UIHelpers.StatusDot(isActive);
         ImGui.SameLine();
 
-        // Default star
         if (isDefault)
         {
             ImGui.TextColored(Colors.Star, FontAwesomeIcon.Star.ToIconString());
             ImGui.SameLine();
         }
 
-        // Preset name
         var textColor = isActive ? Colors.Active : Colors.TextNormal;
         using (ImRaii.PushColor(ImGuiCol.Text, textColor))
         {
@@ -141,13 +134,11 @@ public class ProfilesTab
             }
         }
 
-        // Tooltip
         if (ImGui.IsItemHovered())
         {
             DrawPresetTooltip(preset, pluginCount, alwaysOnCount, totalPlugins, isDefault);
         }
 
-        // Plugin count
         ImGui.TextColored(Colors.TextMuted, $"     {totalPlugins} plugins");
     }
 

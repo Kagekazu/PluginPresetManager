@@ -45,12 +45,10 @@ public class MainWindow : Window, IDisposable
 
     public override void Draw()
     {
-        // Header: Character selector
         DrawHeader();
 
         ImGui.Spacing();
 
-        // Tabs
         using (var tabBar = ImRaii.TabBar("MainTabs"))
         {
             if (!tabBar) return;
@@ -100,14 +98,12 @@ public class MainWindow : Window, IDisposable
         var characters = presetManager.GetAllCharacters();
         var currentId = presetManager.CurrentCharacterId;
 
-        // Build character list
         var items = new List<(string name, ulong id)> { ("Global", CharacterStorage.GlobalContentId) };
         foreach (var c in characters)
         {
             items.Add((c.DisplayName, c.ContentId));
         }
 
-        // Find current
         var currentIndex = 0;
         for (var i = 0; i < items.Count; i++)
         {

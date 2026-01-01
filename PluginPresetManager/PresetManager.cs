@@ -25,10 +25,6 @@ public class PresetManager
 
     private CharacterData currentData;
 
-    // For undo functionality
-    private Dictionary<string, bool>? previousPluginStates;
-
-    // Progress tracking for UI
     public bool IsApplying { get; private set; }
     public string ApplyingStatus { get; private set; } = string.Empty;
     public float ApplyingProgress { get; private set; }
@@ -53,14 +49,12 @@ public class PresetManager
         this.globalConfig = globalConfig;
         this.storage = storage;
 
-        // Initialize reflection helper for experimental persistent mode
         reflectionHelper = new DalamudReflectionHelper(pluginInterface, log);
         if (globalConfig.UseExperimentalPersistence)
         {
             reflectionHelper.TryInitialize();
         }
 
-        // Start with global data
         currentData = storage.GetGlobal();
     }
 
@@ -253,8 +247,6 @@ public class PresetManager
 
     #region Apply Presets
 
-    public bool CanUndo => previousPluginStates != null;
-
     public async Task ApplyAlwaysOnOnlyAsync(IProgress<string>? progress = null)
     {
         if (IsApplying) return;
@@ -265,8 +257,6 @@ public class PresetManager
 
         try
         {
-            SaveCurrentPluginStates();
-
             progress?.Report("Applying always-on plugins only...");
             log.Info("Starting always-on only mode");
 
@@ -316,8 +306,6 @@ public class PresetManager
 
         try
         {
-            SaveCurrentPluginStates();
-
             progress?.Report("Validating preset...");
             log.Info($"Applying preset: {preset.Name}");
 
@@ -371,7 +359,6 @@ public class PresetManager
         var total = toDisable.Count + toEnable.Count;
         var current = 0;
 
-        // Disable plugins
         progress?.Report($"Disabling {toDisable.Count} plugins...");
         foreach (var plugin in toDisable)
         {
@@ -383,7 +370,6 @@ public class PresetManager
             await Task.Delay(DelayBetweenCommands);
         }
 
-        // Enable plugins
         progress?.Report($"Enabling {toEnable.Count} plugins...");
         foreach (var pluginName in toEnable)
         {
@@ -413,60 +399,6 @@ public class PresetManager
         }
 
         log.Warning($"Plugin {internalName} did not reach expected state within timeout");
-    }
-
-    public async Task UndoLastApplyAsync()
-    {
-        if (previousPluginStates == null)
-        {
-            ShowNotification("Nothing to undo", true);
-            return;
-        }
-
-        log.Info("Undoing last preset application...");
-        IsApplying = true;
-        ApplyingStatus = "Reverting...";
-
-        try
-        {
-            var installedPlugins = pluginInterface.InstalledPlugins
-                .GroupBy(p => p.InternalName)
-                .ToDictionary(g => g.Key, g => g.First());
-
-            var total = previousPluginStates.Count;
-            var current = 0;
-
-            foreach (var (internalName, wasLoaded) in previousPluginStates)
-            {
-                current++;
-                ApplyingProgress = (float)current / total;
-
-                if (!installedPlugins.TryGetValue(internalName, out var plugin))
-                    continue;
-
-                if (wasLoaded && !plugin.IsLoaded)
-                {
-                    ApplyingStatus = $"Enabling {plugin.Name}...";
-                    commandManager.ProcessCommand($"/xlenableplugin \"{plugin.Name}\"");
-                    await Task.Delay(DelayBetweenCommands);
-                }
-                else if (!wasLoaded && plugin.IsLoaded)
-                {
-                    ApplyingStatus = $"Disabling {plugin.Name}...";
-                    commandManager.ProcessCommand($"/xldisableplugin \"{plugin.Name}\"");
-                    await Task.Delay(DelayBetweenCommands);
-                }
-            }
-
-            previousPluginStates = null;
-            ShowNotification("Reverted to previous state");
-        }
-        finally
-        {
-            IsApplying = false;
-            ApplyingStatus = string.Empty;
-            ApplyingProgress = 0;
-        }
     }
 
     #endregion
@@ -568,13 +500,6 @@ public class PresetManager
         }
 
         commandManager.ProcessCommand($"/xldisableplugin \"{plugin.Name}\"");
-    }
-
-    private void SaveCurrentPluginStates()
-    {
-        previousPluginStates = pluginInterface.InstalledPlugins
-            .GroupBy(p => p.InternalName)
-            .ToDictionary(g => g.Key, g => g.First().IsLoaded);
     }
 
     private void ShowNotification(string message, bool isError = false)

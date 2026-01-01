@@ -21,7 +21,6 @@ public class Configuration : IPluginConfiguration
 {
     public int Version { get; set; } = 4;
 
-    // Legacy properties - kept for migration, now stored per-character
     [JsonProperty]
     public Guid? LastAppliedPresetId { get; set; }
 
@@ -37,7 +36,6 @@ public class Configuration : IPluginConfiguration
     [JsonProperty]
     public NotificationMode NotificationMode { get; set; } = NotificationMode.Toast;
 
-    // Global settings (not per-character)
     public bool UseExperimentalPersistence { get; set; } = false;
 
     public ulong LastSelectedCharacterId { get; set; } = 0;
@@ -76,7 +74,6 @@ public class Configuration : IPluginConfiguration
 
         if (Version < 3)
         {
-            // Update old check interval (250ms) to new less aggressive interval (1000ms)
             if (PluginStateCheckInterval == 250)
             {
                 PluginStateCheckInterval = 1000;
@@ -85,9 +82,6 @@ public class Configuration : IPluginConfiguration
             Version = 3;
         }
 
-        // Version 4: Per-character configs
-        // Legacy properties are kept in this file for migration
-        // They'll be copied to character configs on first login
         if (Version < 4)
         {
             Version = 4;

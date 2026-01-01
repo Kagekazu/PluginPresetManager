@@ -1,6 +1,7 @@
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
+using Dalamud.Interface.Utility.Raii;
 using PluginPresetManager.UI;
 
 namespace PluginPresetManager.Windows.Tabs;
@@ -36,9 +37,10 @@ public class HelpTab
 
     private static void DrawCommand(string cmd, string desc)
     {
-        ImGui.PushFont(UiBuilder.IconFont);
-        ImGui.TextColored(Colors.Primary, FontAwesomeIcon.ChevronRight.ToIconString());
-        ImGui.PopFont();
+        using (ImRaii.PushFont(UiBuilder.IconFont))
+        {
+            ImGui.TextColored(Colors.Primary, FontAwesomeIcon.ChevronRight.ToIconString());
+        }
         ImGui.SameLine();
         ImGui.TextColored(Colors.Warning, cmd);
         ImGui.SameLine(140);
