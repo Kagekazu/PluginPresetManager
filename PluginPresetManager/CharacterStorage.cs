@@ -13,14 +13,12 @@ public class CharacterStorage
 {
     private readonly IPluginLog log;
     private readonly string baseDirectory;
-    private readonly string globalDirectory;
+    private readonly string globalFilePath;
     private readonly string charactersDirectory;
-    private readonly string charactersFilePath;
-    private readonly string migratedMarkerPath;
 
-    private Dictionary<ulong, CharacterInfo> characters = new();
+    private CharacterData globalData = new();
+    private Dictionary<ulong, CharacterData> characters = new();
 
-    public const string GlobalCharacterName = "Global";
     public const ulong GlobalContentId = 0;
 
     public CharacterStorage(IDalamudPluginInterface pluginInterface, IPluginLog log)
@@ -28,393 +26,462 @@ public class CharacterStorage
         this.log = log;
 
         baseDirectory = pluginInterface.ConfigDirectory.FullName;
-        globalDirectory = Path.Combine(baseDirectory, "global");
+        globalFilePath = Path.Combine(baseDirectory, "global.json");
         charactersDirectory = Path.Combine(baseDirectory, "characters");
-        charactersFilePath = Path.Combine(baseDirectory, "characters.json");
-        migratedMarkerPath = Path.Combine(baseDirectory, "migrated");
 
-        Directory.CreateDirectory(globalDirectory);
         Directory.CreateDirectory(charactersDirectory);
 
-        LoadCharacters();
         MigrateIfNeeded();
+        LoadAll();
 
         log.Info($"CharacterStorage initialized at: {baseDirectory}");
     }
 
-    public bool NeedsMigration => !File.Exists(migratedMarkerPath);
+    #region Public API
 
-    private void MigrateIfNeeded()
+    public CharacterData GetGlobal() => globalData;
+
+    public CharacterData GetCharacter(ulong contentId)
     {
-        if (File.Exists(migratedMarkerPath))
-        {
-            log.Info("Migration already completed");
-            return;
-        }
+        if (contentId == GlobalContentId)
+            return globalData;
 
-        log.Info("Checking for legacy data to migrate...");
-
-        var legacyPresetsDir = Path.Combine(baseDirectory, "presets");
-        var legacyAlwaysOnPath = Path.Combine(baseDirectory, "always-on.json");
-
-        var hasLegacyData = Directory.Exists(legacyPresetsDir) || File.Exists(legacyAlwaysOnPath);
-
-        if (hasLegacyData)
-        {
-            log.Info("Found legacy data, migrating to global folder...");
-
-            var globalPresetsDir = Path.Combine(globalDirectory, "presets");
-            Directory.CreateDirectory(globalPresetsDir);
-
-            // Move presets
-            if (Directory.Exists(legacyPresetsDir))
-            {
-                foreach (var file in Directory.GetFiles(legacyPresetsDir, "*.json"))
-                {
-                    var destPath = Path.Combine(globalPresetsDir, Path.GetFileName(file));
-                    if (!File.Exists(destPath))
-                    {
-                        File.Copy(file, destPath);
-                        log.Info($"Migrated preset: {Path.GetFileName(file)}");
-                    }
-                }
-            }
-
-            // Move always-on
-            if (File.Exists(legacyAlwaysOnPath))
-            {
-                var destPath = Path.Combine(globalDirectory, "always-on.json");
-                if (!File.Exists(destPath))
-                {
-                    File.Copy(legacyAlwaysOnPath, destPath);
-                    log.Info("Migrated always-on.json");
-                }
-            }
-
-            log.Info("Migration to global folder complete");
-        }
-
-        // Create migration marker
-        File.WriteAllText(migratedMarkerPath, DateTime.Now.ToString("o"));
-        log.Info("Migration marker created");
+        return characters.TryGetValue(contentId, out var data) ? data : null!;
     }
 
-    #region Character Management
-
-    private void LoadCharacters()
+    public CharacterData GetOrCreateCharacter(ulong contentId, string name, string world)
     {
-        if (!File.Exists(charactersFilePath))
-        {
-            characters = new Dictionary<ulong, CharacterInfo>();
-            return;
-        }
-
-        try
-        {
-            var json = File.ReadAllText(charactersFilePath);
-            var list = JsonConvert.DeserializeObject<List<CharacterInfo>>(json);
-            characters = list?.ToDictionary(c => c.ContentId, c => c) ?? new Dictionary<ulong, CharacterInfo>();
-            log.Info($"Loaded {characters.Count} character(s)");
-        }
-        catch (Exception ex)
-        {
-            log.Error(ex, "Failed to load characters");
-            characters = new Dictionary<ulong, CharacterInfo>();
-        }
-    }
-
-    private void SaveCharacters()
-    {
-        try
-        {
-            var json = JsonConvert.SerializeObject(characters.Values.ToList(), Formatting.Indented);
-            File.WriteAllText(charactersFilePath, json);
-        }
-        catch (Exception ex)
-        {
-            log.Error(ex, "Failed to save characters");
-        }
-    }
-
-    public List<CharacterInfo> GetAllCharacters()
-    {
-        return characters.Values.OrderBy(c => c.Name).ToList();
-    }
-
-    public CharacterInfo? GetCharacter(ulong contentId)
-    {
-        return characters.TryGetValue(contentId, out var info) ? info : null;
-    }
-
-    public void RegisterCharacter(ulong contentId, string name, string world)
-    {
-        if (contentId == 0) return;
+        if (contentId == GlobalContentId)
+            return globalData;
 
         if (characters.TryGetValue(contentId, out var existing))
         {
+            // Update name/world in case of rename
+            var oldFileName = existing.FileName;
             existing.Name = name;
             existing.World = world;
             existing.LastSeen = DateTime.Now;
-        }
-        else
-        {
-            characters[contentId] = new CharacterInfo
+
+            // Rename file if name changed
+            if (oldFileName != existing.FileName)
             {
-                ContentId = contentId,
-                Name = name,
-                World = world,
-                LastSeen = DateTime.Now
-            };
-            log.Info($"Registered new character: {name} @ {world}");
+                var oldPath = Path.Combine(charactersDirectory, $"{oldFileName}.json");
+                if (File.Exists(oldPath))
+                {
+                    File.Delete(oldPath);
+                }
+            }
+
+            Save(existing);
+            return existing;
         }
 
-        SaveCharacters();
-        EnsureCharacterDirectory(contentId);
-    }
-
-    public bool HasCharacterData(ulong contentId)
-    {
-        var charDir = GetCharacterDirectory(contentId);
-        if (!Directory.Exists(charDir)) return false;
-
-        var presetsDir = Path.Combine(charDir, "presets");
-        var alwaysOnPath = Path.Combine(charDir, "always-on.json");
-
-        return Directory.Exists(presetsDir) && Directory.GetFiles(presetsDir, "*.json").Any()
-               || File.Exists(alwaysOnPath);
-    }
-
-    #endregion
-
-    #region Directory Management
-
-    public string GetCharacterDirectory(ulong contentId)
-    {
-        if (contentId == GlobalContentId)
-            return globalDirectory;
-
-        return Path.Combine(charactersDirectory, contentId.ToString());
-    }
-
-    public string GetPresetsDirectory(ulong contentId)
-    {
-        return Path.Combine(GetCharacterDirectory(contentId), "presets");
-    }
-
-    public string GetAlwaysOnFilePath(ulong contentId)
-    {
-        return Path.Combine(GetCharacterDirectory(contentId), "always-on.json");
-    }
-
-    public string GetConfigFilePath(ulong contentId)
-    {
-        return Path.Combine(GetCharacterDirectory(contentId), "config.json");
-    }
-
-    private void EnsureCharacterDirectory(ulong contentId)
-    {
-        var charDir = GetCharacterDirectory(contentId);
-        var presetsDir = GetPresetsDirectory(contentId);
-
-        Directory.CreateDirectory(charDir);
-        Directory.CreateDirectory(presetsDir);
-    }
-
-    #endregion
-
-    #region Preset Storage
-
-    public List<Preset> LoadPresets(ulong contentId)
-    {
-        var presets = new List<Preset>();
-        var presetsDir = GetPresetsDirectory(contentId);
-
-        if (!Directory.Exists(presetsDir))
+        // Create new
+        var newData = new CharacterData
         {
-            return presets;
+            ContentId = contentId,
+            Name = name,
+            World = world,
+            LastSeen = DateTime.Now
+        };
+        characters[contentId] = newData;
+        Save(newData);
+        log.Info($"Created new character data: {name} @ {world}");
+        return newData;
+    }
+
+    public List<CharacterData> GetAllCharacters()
+    {
+        return characters.Values
+            .OrderBy(c => c.Name)
+            .ToList();
+    }
+
+    public void Save(CharacterData data)
+    {
+        try
+        {
+            string filePath;
+            if (data.ContentId == GlobalContentId)
+            {
+                filePath = globalFilePath;
+            }
+            else
+            {
+                filePath = Path.Combine(charactersDirectory, $"{data.FileName}.json");
+            }
+
+            var json = JsonConvert.SerializeObject(data, Formatting.Indented);
+            File.WriteAllText(filePath, json);
+        }
+        catch (Exception ex)
+        {
+            log.Error(ex, $"Failed to save character data for {data.Name}");
+        }
+    }
+
+    public void DeleteCharacter(ulong contentId)
+    {
+        if (contentId == GlobalContentId) return;
+
+        if (characters.TryGetValue(contentId, out var data))
+        {
+            var filePath = Path.Combine(charactersDirectory, $"{data.FileName}.json");
+            if (File.Exists(filePath))
+            {
+                File.Delete(filePath);
+            }
+            characters.Remove(contentId);
+            log.Info($"Deleted character data: {data.Name}");
+        }
+    }
+
+    public Preset? CopyPresetFromCharacter(ulong sourceContentId, string presetName)
+    {
+        var sourceData = sourceContentId == GlobalContentId ? globalData : characters.GetValueOrDefault(sourceContentId);
+        if (sourceData == null) return null;
+
+        var sourcePreset = sourceData.Presets.FirstOrDefault(p => p.Name == presetName);
+        if (sourcePreset == null) return null;
+
+        return new Preset
+        {
+            Name = sourcePreset.Name,
+            Description = sourcePreset.Description,
+            Plugins = new HashSet<string>(sourcePreset.Plugins),
+            CreatedAt = DateTime.Now,
+            LastModified = DateTime.Now
+        };
+    }
+
+    #endregion
+
+    #region Loading
+
+    private void LoadAll()
+    {
+        // Load global
+        globalData = LoadFile(globalFilePath) ?? new CharacterData { ContentId = GlobalContentId, Name = "Global" };
+        globalData.ContentId = GlobalContentId;
+
+        // Load all character files
+        characters.Clear();
+        if (Directory.Exists(charactersDirectory))
+        {
+            foreach (var file in Directory.GetFiles(charactersDirectory, "*.json"))
+            {
+                var data = LoadFile(file);
+                if (data != null && data.ContentId != GlobalContentId)
+                {
+                    characters[data.ContentId] = data;
+                }
+            }
         }
 
-        foreach (var file in Directory.GetFiles(presetsDir, "*.json"))
+        log.Info($"Loaded global data and {characters.Count} character(s)");
+    }
+
+    private CharacterData? LoadFile(string filePath)
+    {
+        if (!File.Exists(filePath)) return null;
+
+        try
+        {
+            var json = File.ReadAllText(filePath);
+            return JsonConvert.DeserializeObject<CharacterData>(json);
+        }
+        catch (Exception ex)
+        {
+            log.Error(ex, $"Failed to load: {filePath}");
+            return null;
+        }
+    }
+
+    #endregion
+
+    #region Migration
+
+    private void MigrateIfNeeded()
+    {
+        var migrationMarker = Path.Combine(baseDirectory, "v2_migrated");
+        if (File.Exists(migrationMarker)) return;
+
+        log.Info("Checking for data to migrate...");
+
+        // Try migrate from current structure (global/ and characters/{contentId}/)
+        MigrateFromCurrentStructure();
+
+        // Try migrate from legacy structure (presets/ and always-on.json in root)
+        MigrateFromLegacyStructure();
+
+        File.WriteAllText(migrationMarker, DateTime.Now.ToString("o"));
+        log.Info("Migration complete");
+    }
+
+    private void MigrateFromCurrentStructure()
+    {
+        var globalDir = Path.Combine(baseDirectory, "global");
+        var charsDir = Path.Combine(baseDirectory, "characters");
+        var charsFile = Path.Combine(baseDirectory, "characters.json");
+
+        // Migrate global folder
+        if (Directory.Exists(globalDir))
+        {
+            var data = MigrateCharacterFolder(globalDir, GlobalContentId, "Global", "");
+            if (data != null)
+            {
+                globalData = data;
+                Save(globalData);
+                log.Info("Migrated global data from folder structure");
+            }
+        }
+
+        // Load character info from characters.json
+        Dictionary<ulong, (string name, string world)> charInfo = new();
+        if (File.Exists(charsFile))
         {
             try
             {
-                var json = File.ReadAllText(file);
-                var preset = JsonConvert.DeserializeObject<Preset>(json);
-                if (preset != null)
+                var json = File.ReadAllText(charsFile);
+                var list = JsonConvert.DeserializeObject<List<CharacterInfoLegacy>>(json);
+                if (list != null)
                 {
-                    presets.Add(preset);
+                    foreach (var c in list)
+                    {
+                        charInfo[c.ContentId] = (c.Name, c.World);
+                    }
                 }
             }
             catch (Exception ex)
             {
-                log.Error(ex, $"Failed to load preset from {file}");
+                log.Warning(ex, "Failed to read characters.json for migration");
             }
         }
 
-        return presets.OrderBy(p => p.Name).ToList();
-    }
-
-    public void SavePreset(ulong contentId, Preset preset)
-    {
-        EnsureCharacterDirectory(contentId);
-
-        var presetsDir = GetPresetsDirectory(contentId);
-        var fileName = SanitizeFileName(preset.Name) + $"_{preset.Id}.json";
-        var filePath = Path.Combine(presetsDir, fileName);
-
-        // Delete old file if name changed
-        var existingFiles = Directory.GetFiles(presetsDir, $"*{preset.Id}.json");
-        foreach (var oldFile in existingFiles)
+        // Migrate character folders
+        if (Directory.Exists(charsDir))
         {
-            if (oldFile != filePath)
+            foreach (var dir in Directory.GetDirectories(charsDir))
             {
-                File.Delete(oldFile);
+                var folderName = Path.GetFileName(dir);
+                if (ulong.TryParse(folderName, out var contentId) && contentId != GlobalContentId)
+                {
+                    var (name, world) = charInfo.GetValueOrDefault(contentId, ($"Character_{contentId}", ""));
+                    var data = MigrateCharacterFolder(dir, contentId, name, world);
+                    if (data != null)
+                    {
+                        characters[contentId] = data;
+                        Save(data);
+                        log.Info($"Migrated character: {name}");
+                    }
+                }
             }
         }
-
-        var json = JsonConvert.SerializeObject(preset, Formatting.Indented);
-        File.WriteAllText(filePath, json);
     }
 
-    public void DeletePreset(ulong contentId, Preset preset)
+    private CharacterData? MigrateCharacterFolder(string folderPath, ulong contentId, string name, string world)
     {
-        var presetsDir = GetPresetsDirectory(contentId);
-        if (!Directory.Exists(presetsDir)) return;
+        var presetsDir = Path.Combine(folderPath, "presets");
+        var alwaysOnPath = Path.Combine(folderPath, "always-on.json");
+        var configPath = Path.Combine(folderPath, "config.json");
 
-        foreach (var file in Directory.GetFiles(presetsDir, $"*{preset.Id}.json"))
+        var data = new CharacterData
         {
-            File.Delete(file);
-            log.Info($"Deleted preset file: {Path.GetFileName(file)}");
-        }
-    }
-
-    #endregion
-
-    #region Always-On Storage
-
-    public HashSet<string> LoadAlwaysOn(ulong contentId)
-    {
-        var filePath = GetAlwaysOnFilePath(contentId);
-
-        if (!File.Exists(filePath))
-        {
-            return new HashSet<string>();
-        }
-
-        try
-        {
-            var json = File.ReadAllText(filePath);
-            return JsonConvert.DeserializeObject<HashSet<string>>(json) ?? new HashSet<string>();
-        }
-        catch (Exception ex)
-        {
-            log.Error(ex, "Failed to load always-on plugins");
-            return new HashSet<string>();
-        }
-    }
-
-    public void SaveAlwaysOn(ulong contentId, HashSet<string> plugins)
-    {
-        EnsureCharacterDirectory(contentId);
-
-        var filePath = GetAlwaysOnFilePath(contentId);
-        var json = JsonConvert.SerializeObject(plugins, Formatting.Indented);
-        File.WriteAllText(filePath, json);
-    }
-
-    #endregion
-
-    #region Character Config Storage
-
-    public CharacterConfig LoadCharacterConfig(ulong contentId)
-    {
-        var filePath = GetConfigFilePath(contentId);
-
-        if (!File.Exists(filePath))
-        {
-            return new CharacterConfig { ContentId = contentId };
-        }
-
-        try
-        {
-            var json = File.ReadAllText(filePath);
-            return JsonConvert.DeserializeObject<CharacterConfig>(json) ?? new CharacterConfig { ContentId = contentId };
-        }
-        catch (Exception ex)
-        {
-            log.Error(ex, "Failed to load character config");
-            return new CharacterConfig { ContentId = contentId };
-        }
-    }
-
-    public void SaveCharacterConfig(ulong contentId, CharacterConfig config)
-    {
-        EnsureCharacterDirectory(contentId);
-
-        var filePath = GetConfigFilePath(contentId);
-        var json = JsonConvert.SerializeObject(config, Formatting.Indented);
-        File.WriteAllText(filePath, json);
-    }
-
-    #endregion
-
-    #region Copy/Import Operations
-
-    public void CopyFromGlobal(ulong targetContentId)
-    {
-        CopyCharacterData(GlobalContentId, targetContentId);
-    }
-
-    public void CopyCharacterData(ulong sourceContentId, ulong targetContentId)
-    {
-        if (sourceContentId == targetContentId) return;
-
-        log.Info($"Copying data from {sourceContentId} to {targetContentId}");
-
-        // Copy presets
-        var sourcePresets = LoadPresets(sourceContentId);
-        foreach (var preset in sourcePresets)
-        {
-            // Create new preset with new ID to avoid conflicts
-            var newPreset = new Preset
-            {
-                Id = Guid.NewGuid(),
-                Name = preset.Name,
-                Description = preset.Description,
-                EnabledPlugins = new HashSet<string>(preset.EnabledPlugins),
-                CreatedAt = DateTime.Now,
-                LastModified = DateTime.Now
-            };
-            SavePreset(targetContentId, newPreset);
-        }
-
-        // Copy always-on
-        var sourceAlwaysOn = LoadAlwaysOn(sourceContentId);
-        var targetAlwaysOn = LoadAlwaysOn(targetContentId);
-        targetAlwaysOn.UnionWith(sourceAlwaysOn);
-        SaveAlwaysOn(targetContentId, targetAlwaysOn);
-
-        // Copy config
-        var sourceConfig = LoadCharacterConfig(sourceContentId);
-        var targetConfig = new CharacterConfig
-        {
-            ContentId = targetContentId,
-            NotificationMode = sourceConfig.NotificationMode,
+            ContentId = contentId,
+            Name = name,
+            World = world,
+            LastSeen = DateTime.Now
         };
-        SaveCharacterConfig(targetContentId, targetConfig);
 
-        log.Info($"Copied {sourcePresets.Count} presets and {sourceAlwaysOn.Count} always-on plugins");
+        // Load presets
+        if (Directory.Exists(presetsDir))
+        {
+            foreach (var file in Directory.GetFiles(presetsDir, "*.json"))
+            {
+                try
+                {
+                    var json = File.ReadAllText(file);
+                    var oldPreset = JsonConvert.DeserializeObject<PresetLegacy>(json);
+                    if (oldPreset != null)
+                    {
+                        data.Presets.Add(new Preset
+                        {
+                            Name = oldPreset.Name,
+                            Description = oldPreset.Description ?? "",
+                            Plugins = oldPreset.EnabledPlugins ?? new HashSet<string>(),
+                            CreatedAt = oldPreset.CreatedAt,
+                            LastModified = oldPreset.LastModified
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    log.Warning(ex, $"Failed to migrate preset: {file}");
+                }
+            }
+        }
+
+        // Load always-on
+        if (File.Exists(alwaysOnPath))
+        {
+            try
+            {
+                var json = File.ReadAllText(alwaysOnPath);
+                data.AlwaysOn = JsonConvert.DeserializeObject<HashSet<string>>(json) ?? new HashSet<string>();
+            }
+            catch (Exception ex)
+            {
+                log.Warning(ex, "Failed to migrate always-on");
+            }
+        }
+
+        // Load config
+        if (File.Exists(configPath))
+        {
+            try
+            {
+                var json = File.ReadAllText(configPath);
+                var config = JsonConvert.DeserializeObject<CharacterConfigLegacy>(json);
+                if (config != null)
+                {
+                    // Convert GUID-based preset references to name-based
+                    if (config.DefaultPresetId.HasValue)
+                    {
+                        var preset = data.Presets.FirstOrDefault(p =>
+                            File.Exists(Path.Combine(presetsDir, $"*{config.DefaultPresetId.Value}.json")));
+                        // We'll match by reading all presets and finding the one with matching ID
+                        data.DefaultPreset = FindPresetNameByGuid(presetsDir, config.DefaultPresetId.Value, data.Presets);
+                    }
+                    if (config.LastAppliedPresetId.HasValue)
+                    {
+                        data.LastAppliedPreset = FindPresetNameByGuid(presetsDir, config.LastAppliedPresetId.Value, data.Presets);
+                    }
+                    data.NotificationMode = config.NotificationMode;
+                }
+            }
+            catch (Exception ex)
+            {
+                log.Warning(ex, "Failed to migrate config");
+            }
+        }
+
+        return data.Presets.Count > 0 || data.AlwaysOn.Count > 0 ? data : null;
+    }
+
+    private string? FindPresetNameByGuid(string presetsDir, Guid id, List<Preset> presets)
+    {
+        // The old format stored presets as "Name_GUID.json"
+        // Try to find a file matching this GUID
+        if (!Directory.Exists(presetsDir)) return null;
+
+        foreach (var file in Directory.GetFiles(presetsDir, $"*{id}.json"))
+        {
+            try
+            {
+                var json = File.ReadAllText(file);
+                var oldPreset = JsonConvert.DeserializeObject<PresetLegacy>(json);
+                if (oldPreset?.Id == id)
+                {
+                    return oldPreset.Name;
+                }
+            }
+            catch { }
+        }
+
+        return null;
+    }
+
+    private void MigrateFromLegacyStructure()
+    {
+        // Original structure: presets/ and always-on.json in root
+        var legacyPresetsDir = Path.Combine(baseDirectory, "presets");
+        var legacyAlwaysOnPath = Path.Combine(baseDirectory, "always-on.json");
+
+        if (!Directory.Exists(legacyPresetsDir) && !File.Exists(legacyAlwaysOnPath))
+            return;
+
+        log.Info("Found legacy structure, migrating to global...");
+
+        // Only migrate to global if global doesn't already have data
+        if (globalData.Presets.Count > 0 || globalData.AlwaysOn.Count > 0)
+        {
+            log.Info("Global already has data, skipping legacy migration");
+            return;
+        }
+
+        if (Directory.Exists(legacyPresetsDir))
+        {
+            foreach (var file in Directory.GetFiles(legacyPresetsDir, "*.json"))
+            {
+                try
+                {
+                    var json = File.ReadAllText(file);
+                    var oldPreset = JsonConvert.DeserializeObject<PresetLegacy>(json);
+                    if (oldPreset != null)
+                    {
+                        globalData.Presets.Add(new Preset
+                        {
+                            Name = oldPreset.Name,
+                            Description = oldPreset.Description ?? "",
+                            Plugins = oldPreset.EnabledPlugins ?? new HashSet<string>(),
+                            CreatedAt = oldPreset.CreatedAt,
+                            LastModified = oldPreset.LastModified
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    log.Warning(ex, $"Failed to migrate legacy preset: {file}");
+                }
+            }
+        }
+
+        if (File.Exists(legacyAlwaysOnPath))
+        {
+            try
+            {
+                var json = File.ReadAllText(legacyAlwaysOnPath);
+                globalData.AlwaysOn = JsonConvert.DeserializeObject<HashSet<string>>(json) ?? new HashSet<string>();
+            }
+            catch (Exception ex)
+            {
+                log.Warning(ex, "Failed to migrate legacy always-on");
+            }
+        }
+
+        if (globalData.Presets.Count > 0 || globalData.AlwaysOn.Count > 0)
+        {
+            Save(globalData);
+            log.Info($"Migrated {globalData.Presets.Count} presets and {globalData.AlwaysOn.Count} always-on plugins from legacy structure");
+        }
     }
 
     #endregion
 
-    #region Helpers
+    #region Legacy Models for Migration
 
-    private static string SanitizeFileName(string name)
+    private class PresetLegacy
     {
-        var invalid = Path.GetInvalidFileNameChars();
-        var sanitized = string.Join("_", name.Split(invalid, StringSplitOptions.RemoveEmptyEntries)).TrimEnd('.');
-        return string.IsNullOrWhiteSpace(sanitized) ? "preset" : sanitized;
+        public Guid Id { get; set; }
+        public string Name { get; set; } = "";
+        public string? Description { get; set; }
+        public HashSet<string>? EnabledPlugins { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public DateTime LastModified { get; set; }
+    }
+
+    private class CharacterConfigLegacy
+    {
+        public Guid? DefaultPresetId { get; set; }
+        public Guid? LastAppliedPresetId { get; set; }
+        public NotificationMode NotificationMode { get; set; }
+    }
+
+    private class CharacterInfoLegacy
+    {
+        public ulong ContentId { get; set; }
+        public string Name { get; set; } = "";
+        public string World { get; set; } = "";
     }
 
     #endregion

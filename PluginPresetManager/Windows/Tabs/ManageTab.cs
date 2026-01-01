@@ -22,6 +22,8 @@ public class ManageTab
     private string searchFilter = string.Empty;
     private string importError = string.Empty;
     private bool showAlwaysOn = false;
+    private bool showImportFromCharacter = false;
+    private ulong importSourceCharacterId = 0;
 
     public ManageTab(Plugin plugin, PresetManager presetManager)
     {
@@ -29,7 +31,7 @@ public class ManageTab
         this.presetManager = presetManager;
     }
 
-    private CharacterConfig Config => presetManager.CurrentConfig;
+    private CharacterData Data => presetManager.CurrentData;
 
     public void Draw()
     {
@@ -70,13 +72,122 @@ public class ManageTab
             ImportPresetFromClipboard();
         }
 
+        ImGui.SameLine();
+        if (UIHelpers.IconButton(FontAwesomeIcon.UserFriends, "FromChar", "Import from another character", Sizing.ButtonSmall))
+        {
+            showImportFromCharacter = !showImportFromCharacter;
+            importSourceCharacterId = 0;
+        }
+
         if (!string.IsNullOrEmpty(importError))
         {
             ImGui.SameLine();
             ImGui.TextColored(Colors.Error, importError);
         }
 
+        // Import from character popup
+        if (showImportFromCharacter)
+        {
+            DrawImportFromCharacterPopup();
+        }
+
         ImGui.Spacing();
+    }
+
+    private void DrawImportFromCharacterPopup()
+    {
+        ImGui.Spacing();
+        using (ImRaii.PushColor(ImGuiCol.ChildBg, new Vector4(0.15f, 0.15f, 0.15f, 1f)))
+        using (var child = ImRaii.Child("ImportFromChar", new Vector2(0, 120), true))
+        {
+            if (!child) return;
+
+            ImGui.Text("Import preset from:");
+            ImGui.SameLine();
+
+            // Build source list (exclude current character)
+            var sources = new List<(string name, ulong id)> { ("Global", CharacterStorage.GlobalContentId) };
+            foreach (var c in presetManager.GetAllCharacters())
+            {
+                if (c.ContentId != presetManager.CurrentCharacterId)
+                {
+                    sources.Add((c.DisplayName, c.ContentId));
+                }
+            }
+
+            // Also add Global if we're not already on Global
+            if (presetManager.CurrentCharacterId != CharacterStorage.GlobalContentId)
+            {
+                // Global is already first
+            }
+            else
+            {
+                sources.RemoveAt(0); // Remove Global if we're on Global
+            }
+
+            if (sources.Count == 0)
+            {
+                ImGui.TextColored(Colors.TextMuted, "No other characters available");
+                if (ImGui.Button("Close"))
+                {
+                    showImportFromCharacter = false;
+                }
+                return;
+            }
+
+            // Source character dropdown
+            var currentSourceName = sources.FirstOrDefault(s => s.id == importSourceCharacterId).name ?? sources[0].name;
+            if (importSourceCharacterId == 0)
+            {
+                importSourceCharacterId = sources[0].id;
+                currentSourceName = sources[0].name;
+            }
+
+            ImGui.SetNextItemWidth(150);
+            if (ImGui.BeginCombo("##SourceChar", currentSourceName))
+            {
+                foreach (var (name, id) in sources)
+                {
+                    if (ImGui.Selectable(name, id == importSourceCharacterId))
+                    {
+                        importSourceCharacterId = id;
+                    }
+                }
+                ImGui.EndCombo();
+            }
+
+            ImGui.Spacing();
+
+            // Show presets from source
+            var sourceData = importSourceCharacterId == CharacterStorage.GlobalContentId
+                ? plugin.CharacterStorage.GetGlobal()
+                : plugin.CharacterStorage.GetCharacter(importSourceCharacterId);
+
+            if (sourceData != null && sourceData.Presets.Count > 0)
+            {
+                ImGui.Text("Presets:");
+                using (var presetChild = ImRaii.Child("PresetList", new Vector2(0, 0), false))
+                {
+                    if (presetChild)
+                    {
+                        foreach (var preset in sourceData.Presets)
+                        {
+                            if (ImGui.Button($"Import##{preset.Name}"))
+                            {
+                                presetManager.ImportPresetFromCharacter(importSourceCharacterId, preset.Name);
+                                showImportFromCharacter = false;
+                            }
+                            ImGui.SameLine();
+                            ImGui.Text($"{preset.Name} ({preset.Plugins.Count} plugins)");
+                        }
+                    }
+                }
+            }
+            else
+            {
+                ImGui.TextColored(Colors.TextMuted, "No presets available from this source");
+            }
+        }
     }
 
     private void CreatePreset()
@@ -101,8 +212,8 @@ public class ManageTab
 
         foreach (var preset in presetManager.GetAllPresets())
         {
-            var isSelected = selectedPreset?.Id == preset.Id && !showAlwaysOn;
-            var isDefault = Config.DefaultPresetId == preset.Id;
+            var isSelected = selectedPreset?.Name == preset.Name && !showAlwaysOn;
+            var isDefault = Data.DefaultPreset == preset.Name;
 
             // Build label
             if (isDefault)
@@ -111,7 +222,7 @@ public class ManageTab
                 ImGui.SameLine();
             }
 
-            var label = $"{preset.Name} ({preset.EnabledPlugins.Count})";
+            var label = $"{preset.Name} ({preset.Plugins.Count})";
             if (ImGui.Selectable(label, isSelected))
             {
                 selectedPreset = preset;
@@ -136,7 +247,7 @@ public class ManageTab
 
     private void DrawPresetContextMenu(Preset preset)
     {
-        using var ctx = ImRaii.ContextPopupItem($"PresetCtx_{preset.Id}");
+        using var ctx = ImRaii.ContextPopupItem($"PresetCtx_{preset.Name}");
         if (!ctx) return;
 
         if (ImGui.MenuItem("Duplicate"))
@@ -151,7 +262,7 @@ public class ManageTab
         if (ImGui.MenuItem("Delete"))
         {
             presetManager.DeletePreset(preset);
-            if (selectedPreset?.Id == preset.Id)
+            if (selectedPreset?.Name == preset.Name)
                 selectedPreset = null;
         }
     }
@@ -212,7 +323,7 @@ public class ManageTab
 
     private void DrawPresetActions(Preset preset)
     {
-        var isDefault = Config.DefaultPresetId == preset.Id;
+        var isDefault = Data.DefaultPreset == preset.Name;
 
         // Set Default button
         if (isDefault)
@@ -221,8 +332,7 @@ public class ManageTab
             {
                 if (ImGui.Button("★ Default", new Vector2(Sizing.ButtonLarge, 0)))
                 {
-                    Config.DefaultPresetId = null;
-                    presetManager.SaveCharacterConfig();
+                    presetManager.SetDefaultPreset(null);
                 }
             }
         }
@@ -230,8 +340,7 @@ public class ManageTab
         {
             if (ImGui.Button("Set Default", new Vector2(Sizing.ButtonLarge, 0)))
             {
-                Config.DefaultPresetId = preset.Id;
-                presetManager.SaveCharacterConfig();
+                presetManager.SetDefaultPreset(preset.Name);
             }
         }
         if (ImGui.IsItemHovered())
@@ -312,13 +421,13 @@ public class ManageTab
             if (alwaysOnPlugins.Contains(p.InternalName)) continue;
             if (!MatchesFilter(p.InternalName, installedPlugins)) continue;
 
-            var isInPreset = preset.EnabledPlugins.Contains(p.InternalName);
+            var isInPreset = preset.Plugins.Contains(p.InternalName);
             if (ImGui.Checkbox($"{p.Name}##{p.InternalName}", ref isInPreset))
             {
                 if (isInPreset)
-                    preset.EnabledPlugins.Add(p.InternalName);
+                    preset.Plugins.Add(p.InternalName);
                 else
-                    preset.EnabledPlugins.Remove(p.InternalName);
+                    preset.Plugins.Remove(p.InternalName);
                 presetManager.UpdatePreset(preset);
             }
 
@@ -415,10 +524,10 @@ public class ManageTab
         foreach (var p in Plugin.PluginInterface.InstalledPlugins)
         {
             if (p.IsLoaded &&
-                !preset.EnabledPlugins.Contains(p.InternalName) &&
+                !preset.Plugins.Contains(p.InternalName) &&
                 !alwaysOn.Contains(p.InternalName))
             {
-                preset.EnabledPlugins.Add(p.InternalName);
+                preset.Plugins.Add(p.InternalName);
                 added++;
             }
         }
@@ -434,7 +543,7 @@ public class ManageTab
             {
                 preset.Name,
                 preset.Description,
-                EnabledPlugins = preset.EnabledPlugins.ToList()
+                Plugins = preset.Plugins.ToList()
             };
             ImGui.SetClipboardText(JsonConvert.SerializeObject(exportData, Formatting.Indented));
             Plugin.Log.Info($"Exported preset '{preset.Name}' to clipboard");
@@ -462,7 +571,8 @@ public class ManageTab
             {
                 Name = "",
                 Description = (string?)null,
-                EnabledPlugins = new List<string>()
+                Plugins = new List<string>(),
+                EnabledPlugins = new List<string>() // Support old format too
             });
 
             if (data == null || string.IsNullOrWhiteSpace(data.Name))
@@ -471,12 +581,13 @@ public class ManageTab
                 return;
             }
 
+            var plugins = data.Plugins?.Count > 0 ? data.Plugins : data.EnabledPlugins;
+
             var newPreset = new Preset
             {
-                Id = Guid.NewGuid(),
                 Name = data.Name,
                 Description = data.Description ?? string.Empty,
-                EnabledPlugins = new HashSet<string>(data.EnabledPlugins ?? new List<string>()),
+                Plugins = new HashSet<string>(plugins ?? new List<string>()),
                 CreatedAt = DateTime.Now,
                 LastModified = DateTime.Now
             };

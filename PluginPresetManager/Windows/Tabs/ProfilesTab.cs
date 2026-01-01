@@ -18,7 +18,7 @@ public class ProfilesTab
 
     public void Draw()
     {
-        var config = presetManager.CurrentConfig;
+        var data = presetManager.CurrentData;
         var presets = presetManager.GetAllPresets();
         var alwaysOnCount = presetManager.GetAlwaysOnPlugins().Count;
         var lastApplied = presetManager.GetLastAppliedPreset();
@@ -53,7 +53,7 @@ public class ProfilesTab
         {
             foreach (var preset in presets)
             {
-                DrawPresetRow(preset, config, lastApplied);
+                DrawPresetRow(preset, data, lastApplied);
                 ImGui.Spacing();
             }
         }
@@ -109,11 +109,11 @@ public class ProfilesTab
         ImGui.TextColored(Colors.TextMuted, $"     Disable all except {alwaysOnCount} always-on plugin(s)");
     }
 
-    private void DrawPresetRow(Preset preset, CharacterConfig config, Preset? lastApplied)
+    private void DrawPresetRow(Preset preset, CharacterData data, Preset? lastApplied)
     {
-        var isActive = lastApplied?.Id == preset.Id;
-        var isDefault = config.DefaultPresetId == preset.Id;
-        var pluginCount = preset.EnabledPlugins.Count;
+        var isActive = lastApplied?.Name == preset.Name;
+        var isDefault = data.DefaultPreset == preset.Name;
+        var pluginCount = preset.Plugins.Count;
         var alwaysOnCount = presetManager.GetAlwaysOnPlugins().Count;
         var totalPlugins = pluginCount + alwaysOnCount;
 
@@ -132,7 +132,7 @@ public class ProfilesTab
         var textColor = isActive ? Colors.Active : Colors.TextNormal;
         using (ImRaii.PushColor(ImGuiCol.Text, textColor))
         {
-            if (ImGui.Selectable($"{preset.Name}##{preset.Id}", false))
+            if (ImGui.Selectable($"{preset.Name}##{preset.Name}", false))
             {
                 if (!presetManager.IsApplying && !isActive)
                 {

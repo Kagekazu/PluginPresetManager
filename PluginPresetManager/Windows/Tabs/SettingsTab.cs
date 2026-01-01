@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
@@ -18,7 +19,7 @@ public class SettingsTab
         this.presetManager = presetManager;
     }
 
-    private CharacterConfig CharConfig => presetManager.CurrentConfig;
+    private CharacterData Data => presetManager.CurrentData;
     private Configuration GlobalConfig => plugin.Configuration;
 
     public void Draw()
@@ -26,11 +27,11 @@ public class SettingsTab
         UIHelpers.SectionHeader("Notifications", FontAwesomeIcon.Bell);
 
         ImGui.SetNextItemWidth(Sizing.InputMedium);
-        var currentMode = (int)CharConfig.NotificationMode;
+        var currentMode = (int)Data.NotificationMode;
         if (ImGui.Combo("##NotificationMode", ref currentMode, "None\0Toast\0Chat\0"))
         {
-            CharConfig.NotificationMode = (NotificationMode)currentMode;
-            presetManager.SaveCharacterConfig();
+            Data.NotificationMode = (NotificationMode)currentMode;
+            plugin.CharacterStorage.Save(Data);
         }
 
         UIHelpers.VerticalSpacing(Sizing.SpacingLarge);
@@ -62,7 +63,30 @@ public class SettingsTab
         var alwaysOn = presetManager.GetAlwaysOnPlugins();
 
         ImGui.TextColored(Colors.TextMuted, $"Characters: {characters.Count}");
-        ImGui.TextColored(Colors.TextMuted, $"Presets: {presets.Count}");
+        ImGui.TextColored(Colors.TextMuted, $"Presets (current): {presets.Count}");
         ImGui.TextColored(Colors.TextMuted, $"Always-On: {alwaysOn.Count}");
+
+        // Character management
+        if (characters.Count > 0)
+        {
+            UIHelpers.VerticalSpacing(Sizing.SpacingLarge);
+            UIHelpers.SectionHeader("Character Data", FontAwesomeIcon.Users);
+
+            foreach (var character in characters.OrderByDescending(c => c.LastSeen))
+            {
+                ImGui.Text($"{character.DisplayName}");
+                ImGui.SameLine();
+                ImGui.TextColored(Colors.TextMuted, $"(last seen: {character.LastSeen:yyyy-MM-dd})");
+
+                if (character.ContentId != presetManager.CurrentCharacterId)
+                {
+                    ImGui.SameLine();
+                    if (ImGui.SmallButton($"Delete##{character.ContentId}"))
+                    {
+                        presetManager.DeleteCharacter(character.ContentId);
+                    }
+                }
+            }
+        }
     }
 }

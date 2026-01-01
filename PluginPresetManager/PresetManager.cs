@@ -20,13 +20,10 @@ public class PresetManager
     private readonly INotificationManager notificationManager;
     private readonly IPluginLog log;
     private readonly Configuration globalConfig;
-    private readonly CharacterStorage characterStorage;
+    private readonly CharacterStorage storage;
     private readonly DalamudReflectionHelper reflectionHelper;
 
-    private ulong currentCharacterId = CharacterStorage.GlobalContentId;
-    private List<Preset> presets = new();
-    private HashSet<string> alwaysOnPlugins = new();
-    private CharacterConfig characterConfig = new();
+    private CharacterData currentData;
 
     // For undo functionality
     private Dictionary<string, bool>? previousPluginStates;
@@ -36,8 +33,8 @@ public class PresetManager
     public string ApplyingStatus { get; private set; } = string.Empty;
     public float ApplyingProgress { get; private set; }
 
-    public ulong CurrentCharacterId => currentCharacterId;
-    public CharacterConfig CurrentConfig => characterConfig;
+    public ulong CurrentCharacterId => currentData.ContentId;
+    public CharacterData CurrentData => currentData;
 
     public PresetManager(
         IDalamudPluginInterface pluginInterface,
@@ -46,7 +43,7 @@ public class PresetManager
         INotificationManager notificationManager,
         IPluginLog log,
         Configuration globalConfig,
-        CharacterStorage characterStorage)
+        CharacterStorage storage)
     {
         this.pluginInterface = pluginInterface;
         this.commandManager = commandManager;
@@ -54,7 +51,7 @@ public class PresetManager
         this.notificationManager = notificationManager;
         this.log = log;
         this.globalConfig = globalConfig;
-        this.characterStorage = characterStorage;
+        this.storage = storage;
 
         // Initialize reflection helper for experimental persistent mode
         reflectionHelper = new DalamudReflectionHelper(pluginInterface, log);
@@ -64,117 +61,199 @@ public class PresetManager
         }
 
         // Start with global data
-        LoadCharacterData(CharacterStorage.GlobalContentId);
+        currentData = storage.GetGlobal();
     }
 
-    private async Task EnablePluginAsync(IExposedPlugin plugin)
-    {
-        if (globalConfig.UseExperimentalPersistence && reflectionHelper.TryInitialize())
-        {
-            var success = await reflectionHelper.SetPluginStateAsync(plugin, true);
-            if (success) return;
-            log.Warning($"Fallback to command for {plugin.Name}");
-        }
-
-        commandManager.ProcessCommand($"/xlenableplugin \"{plugin.Name}\"");
-    }
-
-    private async Task DisablePluginAsync(IExposedPlugin plugin)
-    {
-        if (globalConfig.UseExperimentalPersistence && reflectionHelper.TryInitialize())
-        {
-            var success = await reflectionHelper.SetPluginStateAsync(plugin, false);
-            if (success) return;
-            log.Warning($"Fallback to command for {plugin.Name}");
-        }
-
-        commandManager.ProcessCommand($"/xldisableplugin \"{plugin.Name}\"");
-    }
+    #region Character Switching
 
     public void SwitchCharacter(ulong contentId, string? name = null, string? world = null)
     {
-        if (contentId != CharacterStorage.GlobalContentId && name != null)
+        if (contentId == CharacterStorage.GlobalContentId)
         {
-            characterStorage.RegisterCharacter(contentId, name, world ?? string.Empty);
+            currentData = storage.GetGlobal();
+        }
+        else if (name != null)
+        {
+            currentData = storage.GetOrCreateCharacter(contentId, name, world ?? "");
+        }
+        else
+        {
+            var existing = storage.GetCharacter(contentId);
+            if (existing != null)
+            {
+                currentData = existing;
+            }
+            else
+            {
+                currentData = storage.GetGlobal();
+            }
         }
 
-        currentCharacterId = contentId;
         globalConfig.LastSelectedCharacterId = contentId;
-
-        LoadCharacterData(contentId);
-        log.Info($"Switched to character {contentId} ({name ?? "Global"})");
+        log.Info($"Switched to: {currentData.DisplayName}");
     }
 
-    private void LoadCharacterData(ulong contentId)
+    public List<CharacterData> GetAllCharacters() => storage.GetAllCharacters();
+
+    public void DeleteCharacter(ulong contentId) => storage.DeleteCharacter(contentId);
+
+    #endregion
+
+    #region Preset Management
+
+    public List<Preset> GetAllPresets() => currentData.Presets;
+
+    public Preset? GetPresetByName(string name)
     {
-        presets = characterStorage.LoadPresets(contentId);
-        alwaysOnPlugins = characterStorage.LoadAlwaysOn(contentId);
-        characterConfig = characterStorage.LoadCharacterConfig(contentId);
-        characterConfig.ContentId = contentId;
-
-        log.Info($"Loaded {presets.Count} presets and {alwaysOnPlugins.Count} always-on plugins for character {contentId}");
+        return currentData.Presets.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
     }
 
-    public void SaveCharacterConfig()
+    public Preset? GetLastAppliedPreset()
     {
-        characterStorage.SaveCharacterConfig(currentCharacterId, characterConfig);
+        if (string.IsNullOrEmpty(currentData.LastAppliedPreset))
+            return null;
+        return GetPresetByName(currentData.LastAppliedPreset);
     }
 
-    public List<CharacterInfo> GetAllCharacters()
+    public void AddPreset(Preset preset)
     {
-        return characterStorage.GetAllCharacters();
+        // Ensure unique name
+        var baseName = preset.Name;
+        var counter = 1;
+        while (currentData.Presets.Any(p => p.Name.Equals(preset.Name, StringComparison.OrdinalIgnoreCase)))
+        {
+            preset.Name = $"{baseName} ({counter++})";
+        }
+
+        currentData.Presets.Add(preset);
+        Save();
+        log.Info($"Added preset: {preset.Name}");
     }
 
-    public CharacterInfo? GetCharacter(ulong contentId)
+    public void UpdatePreset(Preset preset)
     {
-        return characterStorage.GetCharacter(contentId);
+        preset.LastModified = DateTime.Now;
+        Save();
+        log.Info($"Updated preset: {preset.Name}");
     }
 
-    public bool HasCharacterData(ulong contentId)
+    public void DeletePreset(Preset preset)
     {
-        return characterStorage.HasCharacterData(contentId);
+        if (currentData.Presets.Remove(preset))
+        {
+            if (currentData.DefaultPreset == preset.Name)
+                currentData.DefaultPreset = null;
+            if (currentData.LastAppliedPreset == preset.Name)
+                currentData.LastAppliedPreset = null;
+
+            Save();
+            ShowNotification($"Deleted preset '{preset.Name}'");
+            log.Info($"Deleted preset: {preset.Name}");
+        }
     }
 
-    public void CopyFromGlobal()
+    public Preset DuplicatePreset(Preset source)
     {
-        characterStorage.CopyFromGlobal(currentCharacterId);
-        LoadCharacterData(currentCharacterId);
+        var duplicate = new Preset
+        {
+            Name = $"{source.Name} (Copy)",
+            Description = source.Description,
+            Plugins = new HashSet<string>(source.Plugins),
+            CreatedAt = DateTime.Now,
+            LastModified = DateTime.Now
+        };
+
+        AddPreset(duplicate);
+        ShowNotification($"Duplicated preset '{source.Name}'");
+        return duplicate;
     }
 
-    public void CopyFromCharacter(ulong sourceContentId)
+    public Preset CreatePresetFromCurrent(string name)
     {
-        characterStorage.CopyCharacterData(sourceContentId, currentCharacterId);
-        LoadCharacterData(currentCharacterId);
+        var preset = new Preset
+        {
+            Name = name,
+            CreatedAt = DateTime.Now,
+            LastModified = DateTime.Now
+        };
+
+        foreach (var plugin in pluginInterface.InstalledPlugins)
+        {
+            if (plugin.IsLoaded && !currentData.AlwaysOn.Contains(plugin.InternalName))
+            {
+                preset.Plugins.Add(plugin.InternalName);
+            }
+        }
+
+        log.Info($"Created preset '{name}' with {preset.Plugins.Count} plugins");
+        return preset;
     }
+
+    public Preset? ImportPresetFromCharacter(ulong sourceContentId, string presetName)
+    {
+        var preset = storage.CopyPresetFromCharacter(sourceContentId, presetName);
+        if (preset != null)
+        {
+            AddPreset(preset);
+            ShowNotification($"Imported preset '{preset.Name}'");
+        }
+        return preset;
+    }
+
+    #endregion
+
+    #region Always-On Management
+
+    public HashSet<string> GetAlwaysOnPlugins() => currentData.AlwaysOn;
+
+    public bool IsAlwaysOn(string internalName) => currentData.AlwaysOn.Contains(internalName);
+
+    public void AddAlwaysOnPlugin(string internalName)
+    {
+        if (currentData.AlwaysOn.Add(internalName))
+        {
+            Save();
+
+            var plugin = pluginInterface.InstalledPlugins
+                .FirstOrDefault(p => p.InternalName == internalName);
+
+            if (plugin != null && !plugin.IsLoaded)
+            {
+                commandManager.ProcessCommand($"/xlenableplugin \"{plugin.Name}\"");
+            }
+
+            ShowNotification($"Added '{internalName}' to always-on");
+            log.Info($"Added always-on: {internalName}");
+        }
+    }
+
+    public void RemoveAlwaysOnPlugin(string internalName)
+    {
+        if (currentData.AlwaysOn.Remove(internalName))
+        {
+            Save();
+            ShowNotification($"Removed '{internalName}' from always-on");
+            log.Info($"Removed always-on: {internalName}");
+        }
+    }
+
+    #endregion
+
+    #region Default Preset
+
+    public string? DefaultPreset => currentData.DefaultPreset;
+
+    public void SetDefaultPreset(string? presetName)
+    {
+        currentData.DefaultPreset = presetName;
+        Save();
+    }
+
+    #endregion
+
+    #region Apply Presets
 
     public bool CanUndo => previousPluginStates != null;
-    
-    private void ShowNotification(string message, bool isError = false)
-    {
-        switch (characterConfig.NotificationMode)
-        {
-            case NotificationMode.Toast:
-                notificationManager.AddNotification(new Notification
-                {
-                    Content = message,
-                    Type = isError ? NotificationType.Error : NotificationType.Success,
-                    Title = "Preset Manager"
-                });
-                break;
-            case NotificationMode.Chat:
-                if (isError)
-                    chatGui.PrintError($"[Preset] {message}");
-                else
-                    chatGui.Print($"[Preset] {message}");
-                break;
-            case NotificationMode.None:
-                break;
-        }
-    }
-
-    public List<Preset> GetAllPresets() => presets;
-
-    public HashSet<string> GetAlwaysOnPlugins() => alwaysOnPlugins;
 
     public async Task ApplyAlwaysOnOnlyAsync(IProgress<string>? progress = null)
     {
@@ -189,143 +268,34 @@ public class PresetManager
             SaveCurrentPluginStates();
 
             progress?.Report("Applying always-on plugins only...");
-            log.Info("Starting always-on only mode application");
+            log.Info("Starting always-on only mode");
 
             var installedPlugins = pluginInterface.InstalledPlugins
                 .GroupBy(p => p.InternalName)
                 .ToDictionary(g => g.Key, g => g.First());
 
-            var effectiveEnabledSet = new HashSet<string>(alwaysOnPlugins);
+            var effectiveEnabledSet = new HashSet<string>(currentData.AlwaysOn);
 
             var toDisable = installedPlugins.Values
                 .Where(p => p.IsLoaded && !effectiveEnabledSet.Contains(p.InternalName))
                 .ToList();
 
             var toEnable = effectiveEnabledSet
-                .Where(name => installedPlugins.ContainsKey(name)
-                            && !installedPlugins[name].IsLoaded)
+                .Where(name => installedPlugins.ContainsKey(name) && !installedPlugins[name].IsLoaded)
                 .ToList();
 
-            var failedDisable = new List<string>();
-            var failedEnable = new List<string>();
-            var total = toDisable.Count + toEnable.Count;
-            var current = 0;
+            await ApplyChangesAsync(toDisable, toEnable, installedPlugins, progress);
 
-            progress?.Report($"Disabling {toDisable.Count} plugins...");
-            foreach (var plugin in toDisable)
-            {
-                current++;
-                ApplyingProgress = (float)current / total;
-                ApplyingStatus = $"Disabling {plugin.Name}...";
-                await DisablePluginAsync(plugin);
+            currentData.LastAppliedPreset = null;
+            Save();
 
-                var maxWaitMs = 30000;
-                var waitedMs = 0;
-                var isDisabled = false;
-                while (!isDisabled && waitedMs < maxWaitMs)
-                {
-                    await Task.Delay(PluginStateCheckInterval);
-                    waitedMs += PluginStateCheckInterval;
-
-                    var currentPlugin = pluginInterface.InstalledPlugins
-                        .FirstOrDefault(p => p.InternalName == plugin.InternalName);
-
-                    if (currentPlugin != null)
-                    {
-                        isDisabled = !currentPlugin.IsLoaded;
-                    }
-                }
-
-                if (!isDisabled)
-                {
-                    failedDisable.Add(plugin.Name);
-                    log.Warning($"Plugin {plugin.Name} did not disable within timeout (waited {waitedMs}ms)");
-                }
-
-                await Task.Delay(DelayBetweenCommands);
-            }
-
-            progress?.Report($"Enabling {toEnable.Count} always-on plugins...");
-            foreach (var pluginName in toEnable)
-            {
-                current++;
-                ApplyingProgress = (float)current / total;
-                var plugin = installedPlugins[pluginName];
-                ApplyingStatus = $"Enabling {plugin.Name}...";
-                await EnablePluginAsync(plugin);
-
-                var maxWaitMs = 30000;
-                var waitedMs = 0;
-                var isEnabled = false;
-                while (!isEnabled && waitedMs < maxWaitMs)
-                {
-                    await Task.Delay(PluginStateCheckInterval);
-                    waitedMs += PluginStateCheckInterval;
-
-                    var currentPlugin = pluginInterface.InstalledPlugins
-                        .FirstOrDefault(p => p.InternalName == pluginName);
-
-                    if (currentPlugin != null)
-                    {
-                        isEnabled = currentPlugin.IsLoaded;
-                    }
-                }
-
-                if (!isEnabled)
-                {
-                    failedEnable.Add(plugin.Name);
-                    log.Warning($"Plugin {plugin.Name} did not enable within timeout (waited {waitedMs}ms)");
-                }
-
-                await Task.Delay(DelayBetweenCommands);
-            }
-
-            characterConfig.LastAppliedPresetId = null;
-            SaveCharacterConfig();
-
-            progress?.Report("Always-on only mode applied!");
-            
-            var successfulDisable = toDisable.Count - failedDisable.Count;
-            var successfulEnable = toEnable.Count - failedEnable.Count;
-            
-            if (failedDisable.Count > 0 || failedEnable.Count > 0)
-            {
-                var notificationMessage = $"Applied always-on mode with failures:\n" +
-                    $"Enabled: {successfulEnable}/{toEnable.Count}, Disabled: {successfulDisable}/{toDisable.Count}";
-                    
-                if (failedEnable.Count > 0)
-                {
-                    notificationMessage += $"\nFailed to enable: {string.Join(", ", failedEnable.Take(3))}";
-                    if (failedEnable.Count > 3) notificationMessage += $" and {failedEnable.Count - 3} more";
-                }
-                if (failedDisable.Count > 0)
-                {
-                    notificationMessage += $"\nFailed to disable: {string.Join(", ", failedDisable.Take(3))}";
-                    if (failedDisable.Count > 3) notificationMessage += $" and {failedDisable.Count - 3} more";
-                }
-                
-                ShowNotification(notificationMessage, true);
-                
-                log.Warning($"Applied always-on mode with failures - Enabled: {successfulEnable}/{toEnable.Count}, Disabled: {successfulDisable}/{toDisable.Count}");
-                if (failedEnable.Count > 0)
-                {
-                    log.Warning($"Failed to enable plugins: {string.Join(", ", failedEnable)}");
-                }
-                if (failedDisable.Count > 0)
-                {
-                    log.Warning($"Failed to disable plugins: {string.Join(", ", failedDisable)}");
-                }
-            }
-            else
-            {
-                ShowNotification($"Applied always-on only mode ({toEnable.Count} enabled, {toDisable.Count} disabled)");
-                log.Info($"Successfully applied always-on only mode: {toEnable.Count} enabled, {toDisable.Count} disabled");
-            }
+            ShowNotification($"Applied always-on only mode ({toEnable.Count} enabled, {toDisable.Count} disabled)");
+            log.Info($"Applied always-on only: {toEnable.Count} enabled, {toDisable.Count} disabled");
         }
         catch (Exception ex)
         {
             log.Error(ex, "Failed to apply always-on only mode");
-            ShowNotification($"Failed to apply always-on only mode: {ex.Message}", true);
+            ShowNotification($"Failed: {ex.Message}", true);
             throw;
         }
         finally
@@ -349,160 +319,39 @@ public class PresetManager
             SaveCurrentPluginStates();
 
             progress?.Report("Validating preset...");
-            log.Info($"Starting preset application: {preset.Name}");
-            
-            var missingPlugins = GetMissingPlugins(preset);
-            if (missingPlugins.Count > 0)
-            {
-                log.Warning($"Preset {preset.Name} has {missingPlugins.Count} missing plugins: {string.Join(", ", missingPlugins)}");
-            }
+            log.Info($"Applying preset: {preset.Name}");
 
             var installedPlugins = pluginInterface.InstalledPlugins
                 .GroupBy(p => p.InternalName)
                 .ToDictionary(g => g.Key, g => g.First());
 
-            var effectiveEnabledSet = new HashSet<string>(preset.EnabledPlugins);
-
-            foreach (var alwaysOnPlugin in alwaysOnPlugins)
+            var effectiveEnabledSet = new HashSet<string>(preset.Plugins);
+            foreach (var alwaysOn in currentData.AlwaysOn)
             {
-                if (installedPlugins.ContainsKey(alwaysOnPlugin))
-                {
-                    effectiveEnabledSet.Add(alwaysOnPlugin);
-                }
+                if (installedPlugins.ContainsKey(alwaysOn))
+                    effectiveEnabledSet.Add(alwaysOn);
             }
-
-            progress?.Report($"Effective plugin set: {effectiveEnabledSet.Count} plugins");
 
             var toDisable = installedPlugins.Values
                 .Where(p => p.IsLoaded && !effectiveEnabledSet.Contains(p.InternalName))
                 .ToList();
 
             var toEnable = effectiveEnabledSet
-                .Where(name => installedPlugins.ContainsKey(name)
-                            && !installedPlugins[name].IsLoaded)
+                .Where(name => installedPlugins.ContainsKey(name) && !installedPlugins[name].IsLoaded)
                 .ToList();
 
+            await ApplyChangesAsync(toDisable, toEnable, installedPlugins, progress);
 
-            var failedDisable = new List<string>();
-            var failedEnable = new List<string>();
-            var total = toDisable.Count + toEnable.Count;
-            var current = 0;
+            currentData.LastAppliedPreset = preset.Name;
+            Save();
 
-            progress?.Report($"Disabling {toDisable.Count} plugins...");
-            foreach (var plugin in toDisable)
-            {
-                current++;
-                ApplyingProgress = (float)current / total;
-                ApplyingStatus = $"Disabling {plugin.Name}...";
-                await DisablePluginAsync(plugin);
-
-                var maxWaitMs = 30000;
-                var waitedMs = 0;
-                var isDisabled = false;
-                while (!isDisabled && waitedMs < maxWaitMs)
-                {
-                    await Task.Delay(PluginStateCheckInterval);
-                    waitedMs += PluginStateCheckInterval;
-
-                    var currentPlugin = pluginInterface.InstalledPlugins
-                        .FirstOrDefault(p => p.InternalName == plugin.InternalName);
-
-                    if (currentPlugin != null)
-                    {
-                        isDisabled = !currentPlugin.IsLoaded;
-                    }
-                }
-
-                if (!isDisabled)
-                {
-                    failedDisable.Add(plugin.Name);
-                    log.Warning($"Plugin {plugin.Name} did not disable within timeout (waited {waitedMs}ms)");
-                }
-
-                await Task.Delay(DelayBetweenCommands);
-            }
-
-            progress?.Report($"Enabling {toEnable.Count} plugins...");
-            foreach (var pluginName in toEnable)
-            {
-                current++;
-                ApplyingProgress = (float)current / total;
-                var plugin = installedPlugins[pluginName];
-                ApplyingStatus = $"Enabling {plugin.Name}...";
-                await EnablePluginAsync(plugin);
-
-                var maxWaitMs = 30000;
-                var waitedMs = 0;
-                var isEnabled = false;
-                while (!isEnabled && waitedMs < maxWaitMs)
-                {
-                    await Task.Delay(PluginStateCheckInterval);
-                    waitedMs += PluginStateCheckInterval;
-
-                    var currentPlugin = pluginInterface.InstalledPlugins
-                        .FirstOrDefault(p => p.InternalName == pluginName);
-
-                    if (currentPlugin != null)
-                    {
-                        isEnabled = currentPlugin.IsLoaded;
-                    }
-                }
-
-                if (!isEnabled)
-                {
-                    failedEnable.Add(plugin.Name);
-                    log.Warning($"Plugin {plugin.Name} did not enable within timeout (waited {waitedMs}ms)");
-                }
-
-                await Task.Delay(DelayBetweenCommands);
-            }
-
-            characterConfig.LastAppliedPresetId = preset.Id;
-            SaveCharacterConfig();
-
-            progress?.Report($"Preset '{preset.Name}' applied successfully!");
-            
-            var successfulDisable = toDisable.Count - failedDisable.Count;
-            var successfulEnable = toEnable.Count - failedEnable.Count;
-            
-            if (failedDisable.Count > 0 || failedEnable.Count > 0)
-            {
-                var notificationMessage = $"Applied preset '{preset.Name}' with failures:\n" +
-                    $"Enabled: {successfulEnable}/{toEnable.Count}, Disabled: {successfulDisable}/{toDisable.Count}";
-                    
-                if (failedEnable.Count > 0)
-                {
-                    notificationMessage += $"\nFailed to enable: {string.Join(", ", failedEnable.Take(3))}";
-                    if (failedEnable.Count > 3) notificationMessage += $" and {failedEnable.Count - 3} more";
-                }
-                if (failedDisable.Count > 0)
-                {
-                    notificationMessage += $"\nFailed to disable: {string.Join(", ", failedDisable.Take(3))}";
-                    if (failedDisable.Count > 3) notificationMessage += $" and {failedDisable.Count - 3} more";
-                }
-                
-                ShowNotification(notificationMessage, true);
-                
-                log.Warning($"Applied preset '{preset.Name}' with failures - Enabled: {successfulEnable}/{toEnable.Count}, Disabled: {successfulDisable}/{toDisable.Count}");
-                if (failedEnable.Count > 0)
-                {
-                    log.Warning($"Failed to enable plugins: {string.Join(", ", failedEnable)}");
-                }
-                if (failedDisable.Count > 0)
-                {
-                    log.Warning($"Failed to disable plugins: {string.Join(", ", failedDisable)}");
-                }
-            }
-            else
-            {
-                ShowNotification($"Applied '{preset.Name}' ({toEnable.Count} enabled, {toDisable.Count} disabled)");
-                log.Info($"Successfully applied preset '{preset.Name}': {toEnable.Count} enabled, {toDisable.Count} disabled");
-            }
+            ShowNotification($"Applied '{preset.Name}' ({toEnable.Count} enabled, {toDisable.Count} disabled)");
+            log.Info($"Applied preset '{preset.Name}': {toEnable.Count} enabled, {toDisable.Count} disabled");
         }
         catch (Exception ex)
         {
             log.Error(ex, $"Failed to apply preset '{preset.Name}'");
-            ShowNotification($"Failed to apply '{preset.Name}': {ex.Message}", true);
+            ShowNotification($"Failed: {ex.Message}", true);
             throw;
         }
         finally
@@ -513,41 +362,116 @@ public class PresetManager
         }
     }
 
-    public void AddAlwaysOnPlugin(string internalName)
+    private async Task ApplyChangesAsync(
+        List<IExposedPlugin> toDisable,
+        List<string> toEnable,
+        Dictionary<string, IExposedPlugin> installedPlugins,
+        IProgress<string>? progress)
     {
-        if (!alwaysOnPlugins.Contains(internalName))
+        var total = toDisable.Count + toEnable.Count;
+        var current = 0;
+
+        // Disable plugins
+        progress?.Report($"Disabling {toDisable.Count} plugins...");
+        foreach (var plugin in toDisable)
         {
-            alwaysOnPlugins.Add(internalName);
-            characterStorage.SaveAlwaysOn(currentCharacterId, alwaysOnPlugins);
+            current++;
+            ApplyingProgress = (float)current / total;
+            ApplyingStatus = $"Disabling {plugin.Name}...";
+            await DisablePluginAsync(plugin);
+            await WaitForPluginState(plugin.InternalName, false);
+            await Task.Delay(DelayBetweenCommands);
+        }
 
-            var plugin = pluginInterface.InstalledPlugins
-                .FirstOrDefault(p => p.InternalName == internalName);
+        // Enable plugins
+        progress?.Report($"Enabling {toEnable.Count} plugins...");
+        foreach (var pluginName in toEnable)
+        {
+            current++;
+            ApplyingProgress = (float)current / total;
+            var plugin = installedPlugins[pluginName];
+            ApplyingStatus = $"Enabling {plugin.Name}...";
+            await EnablePluginAsync(plugin);
+            await WaitForPluginState(pluginName, true);
+            await Task.Delay(DelayBetweenCommands);
+        }
+    }
 
-            if (plugin != null && !plugin.IsLoaded)
+    private async Task WaitForPluginState(string internalName, bool expectedLoaded)
+    {
+        var maxWaitMs = 30000;
+        var waitedMs = 0;
+
+        while (waitedMs < maxWaitMs)
+        {
+            await Task.Delay(PluginStateCheckInterval);
+            waitedMs += PluginStateCheckInterval;
+
+            var plugin = pluginInterface.InstalledPlugins.FirstOrDefault(p => p.InternalName == internalName);
+            if (plugin != null && plugin.IsLoaded == expectedLoaded)
+                return;
+        }
+
+        log.Warning($"Plugin {internalName} did not reach expected state within timeout");
+    }
+
+    public async Task UndoLastApplyAsync()
+    {
+        if (previousPluginStates == null)
+        {
+            ShowNotification("Nothing to undo", true);
+            return;
+        }
+
+        log.Info("Undoing last preset application...");
+        IsApplying = true;
+        ApplyingStatus = "Reverting...";
+
+        try
+        {
+            var installedPlugins = pluginInterface.InstalledPlugins
+                .GroupBy(p => p.InternalName)
+                .ToDictionary(g => g.Key, g => g.First());
+
+            var total = previousPluginStates.Count;
+            var current = 0;
+
+            foreach (var (internalName, wasLoaded) in previousPluginStates)
             {
-                commandManager.ProcessCommand($"/xlenableplugin \"{plugin.Name}\"");
+                current++;
+                ApplyingProgress = (float)current / total;
+
+                if (!installedPlugins.TryGetValue(internalName, out var plugin))
+                    continue;
+
+                if (wasLoaded && !plugin.IsLoaded)
+                {
+                    ApplyingStatus = $"Enabling {plugin.Name}...";
+                    commandManager.ProcessCommand($"/xlenableplugin \"{plugin.Name}\"");
+                    await Task.Delay(DelayBetweenCommands);
+                }
+                else if (!wasLoaded && plugin.IsLoaded)
+                {
+                    ApplyingStatus = $"Disabling {plugin.Name}...";
+                    commandManager.ProcessCommand($"/xldisableplugin \"{plugin.Name}\"");
+                    await Task.Delay(DelayBetweenCommands);
+                }
             }
 
-            ShowNotification($"Added '{internalName}' to always-on list");
-            log.Info($"Added '{internalName}' to always-on list");
+            previousPluginStates = null;
+            ShowNotification("Reverted to previous state");
         }
-    }
-
-    public void RemoveAlwaysOnPlugin(string internalName)
-    {
-        if (alwaysOnPlugins.Remove(internalName))
+        finally
         {
-            characterStorage.SaveAlwaysOn(currentCharacterId, alwaysOnPlugins);
-
-            ShowNotification($"Removed '{internalName}' from always-on list");
-            log.Info($"Removed '{internalName}' from always-on list");
+            IsApplying = false;
+            ApplyingStatus = string.Empty;
+            ApplyingProgress = 0;
         }
     }
 
-    public bool IsAlwaysOn(string internalName)
-    {
-        return alwaysOnPlugins.Contains(internalName);
-    }
+    #endregion
+
+    #region Preview
 
     public PresetPreview GetPresetPreview(Preset preset)
     {
@@ -556,13 +480,13 @@ public class PresetManager
             .GroupBy(p => p.InternalName)
             .ToDictionary(g => g.Key, g => g.First());
 
-        var effectiveEnabledSet = new HashSet<string>(preset.EnabledPlugins);
-        effectiveEnabledSet.UnionWith(alwaysOnPlugins);
+        var effectiveEnabledSet = new HashSet<string>(preset.Plugins);
+        effectiveEnabledSet.UnionWith(currentData.AlwaysOn);
 
         foreach (var plugin in installedPlugins.Values)
         {
             var shouldBeEnabled = effectiveEnabledSet.Contains(plugin.InternalName);
-            var isAlwaysOn = alwaysOnPlugins.Contains(plugin.InternalName);
+            var isAlwaysOn = currentData.AlwaysOn.Contains(plugin.InternalName);
 
             if (plugin.IsLoaded && !shouldBeEnabled)
             {
@@ -604,146 +528,46 @@ public class PresetManager
         return preview;
     }
 
-    public Preset CreatePresetFromCurrent(string name)
-    {
-        var preset = new Preset
-        {
-            Name = name,
-            CreatedAt = DateTime.Now,
-            LastModified = DateTime.Now
-        };
-
-        foreach (var plugin in pluginInterface.InstalledPlugins)
-        {
-            if (plugin.IsLoaded && !alwaysOnPlugins.Contains(plugin.InternalName))
-            {
-                preset.EnabledPlugins.Add(plugin.InternalName);
-            }
-        }
-
-        log.Info($"Created preset '{name}' with {preset.EnabledPlugins.Count} plugins");
-        return preset;
-    }
-
-
     public List<string> GetMissingPlugins(Preset preset)
     {
-        var installedPlugins = pluginInterface.InstalledPlugins
-            .GroupBy(p => p.InternalName)
-            .ToDictionary(g => g.Key, g => g.First());
+        var installed = pluginInterface.InstalledPlugins
+            .Select(p => p.InternalName)
+            .ToHashSet();
 
-        return preset.EnabledPlugins
-            .Where(pluginName => !installedPlugins.ContainsKey(pluginName))
-            .ToList();
+        return preset.Plugins.Where(p => !installed.Contains(p)).ToList();
     }
 
-    public Preset? GetPresetById(Guid id)
+    #endregion
+
+    #region Helpers
+
+    private void Save()
     {
-        return presets.FirstOrDefault(p => p.Id == id);
+        storage.Save(currentData);
     }
 
-    public Preset? GetLastAppliedPreset()
+    private async Task EnablePluginAsync(IExposedPlugin plugin)
     {
-        if (characterConfig.LastAppliedPresetId == null)
-            return null;
-
-        return GetPresetById(characterConfig.LastAppliedPresetId.Value);
-    }
-
-    public void DeletePreset(Preset preset)
-    {
-        if (presets.Remove(preset))
+        if (globalConfig.UseExperimentalPersistence && reflectionHelper.TryInitialize())
         {
-            characterStorage.DeletePreset(currentCharacterId, preset);
-            log.Info($"Deleted preset '{preset.Name}'");
-
-            ShowNotification($"Deleted preset '{preset.Name}'");
-        }
-    }
-
-    public void AddPreset(Preset preset)
-    {
-        presets.Add(preset);
-        characterStorage.SavePreset(currentCharacterId, preset);
-        log.Info($"Added new preset '{preset.Name}'");
-    }
-
-    public void UpdatePreset(Preset preset)
-    {
-        preset.LastModified = DateTime.Now;
-        characterStorage.SavePreset(currentCharacterId, preset);
-        log.Info($"Updated preset '{preset.Name}'");
-    }
-
-    public Preset DuplicatePreset(Preset source)
-    {
-        var duplicate = new Preset
-        {
-            Id = Guid.NewGuid(),
-            Name = $"{source.Name} (Copy)",
-            Description = source.Description,
-            EnabledPlugins = new HashSet<string>(source.EnabledPlugins),
-            CreatedAt = DateTime.Now,
-            LastModified = DateTime.Now
-        };
-
-        AddPreset(duplicate);
-        ShowNotification($"Duplicated preset '{source.Name}'");
-        return duplicate;
-    }
-
-    public async Task UndoLastApplyAsync()
-    {
-        if (previousPluginStates == null)
-        {
-            ShowNotification("Nothing to undo", true);
-            return;
+            var success = await reflectionHelper.SetPluginStateAsync(plugin, true);
+            if (success) return;
+            log.Warning($"Fallback to command for {plugin.Name}");
         }
 
-        log.Info("Undoing last preset application...");
-        IsApplying = true;
-        ApplyingStatus = "Reverting to previous state...";
+        commandManager.ProcessCommand($"/xlenableplugin \"{plugin.Name}\"");
+    }
 
-        try
+    private async Task DisablePluginAsync(IExposedPlugin plugin)
+    {
+        if (globalConfig.UseExperimentalPersistence && reflectionHelper.TryInitialize())
         {
-            var installedPlugins = pluginInterface.InstalledPlugins
-                .GroupBy(p => p.InternalName)
-                .ToDictionary(g => g.Key, g => g.First());
-
-            var total = previousPluginStates.Count;
-            var current = 0;
-
-            foreach (var (internalName, wasLoaded) in previousPluginStates)
-            {
-                current++;
-                ApplyingProgress = (float)current / total;
-
-                if (!installedPlugins.TryGetValue(internalName, out var plugin))
-                    continue;
-
-                if (wasLoaded && !plugin.IsLoaded)
-                {
-                    ApplyingStatus = $"Enabling {plugin.Name}...";
-                    commandManager.ProcessCommand($"/xlenableplugin \"{plugin.Name}\"");
-                    await Task.Delay(DelayBetweenCommands);
-                }
-                else if (!wasLoaded && plugin.IsLoaded)
-                {
-                    ApplyingStatus = $"Disabling {plugin.Name}...";
-                    commandManager.ProcessCommand($"/xldisableplugin \"{plugin.Name}\"");
-                    await Task.Delay(DelayBetweenCommands);
-                }
-            }
-
-            previousPluginStates = null;
-            ShowNotification("Reverted to previous plugin state");
+            var success = await reflectionHelper.SetPluginStateAsync(plugin, false);
+            if (success) return;
+            log.Warning($"Fallback to command for {plugin.Name}");
         }
-        finally
-        {
-            IsApplying = false;
-            ApplyingStatus = string.Empty;
-            ApplyingProgress = 0;
-        }
+
+        commandManager.ProcessCommand($"/xldisableplugin \"{plugin.Name}\"");
     }
 
     private void SaveCurrentPluginStates()
@@ -752,4 +576,29 @@ public class PresetManager
             .GroupBy(p => p.InternalName)
             .ToDictionary(g => g.Key, g => g.First().IsLoaded);
     }
+
+    private void ShowNotification(string message, bool isError = false)
+    {
+        switch (currentData.NotificationMode)
+        {
+            case NotificationMode.Toast:
+                notificationManager.AddNotification(new Notification
+                {
+                    Content = message,
+                    Type = isError ? NotificationType.Error : NotificationType.Success,
+                    Title = "Preset Manager"
+                });
+                break;
+            case NotificationMode.Chat:
+                if (isError)
+                    chatGui.PrintError($"[Preset] {message}");
+                else
+                    chatGui.Print($"[Preset] {message}");
+                break;
+            case NotificationMode.None:
+                break;
+        }
+    }
+
+    #endregion
 }

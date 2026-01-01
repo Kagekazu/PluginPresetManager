@@ -70,7 +70,7 @@ public sealed class Plugin : IDalamudPlugin
                 EnsureAlwaysOn();
 
                 // Apply default preset if configured
-                if (PresetManager.CurrentConfig.DefaultPresetId.HasValue)
+                if (!string.IsNullOrEmpty(PresetManager.DefaultPreset))
                 {
                     ApplyDefaultPreset();
                 }
@@ -107,7 +107,7 @@ public sealed class Plugin : IDalamudPlugin
     public void Dispose()
     {
         ClientState.Login -= OnLogin;
-        
+
         PluginInterface.UiBuilder.Draw -= WindowSystem.Draw;
         PluginInterface.UiBuilder.OpenConfigUi -= OpenConfigUi;
         PluginInterface.UiBuilder.OpenMainUi -= ToggleMainUi;
@@ -143,9 +143,7 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
-        var allPresets = PresetManager.GetAllPresets();
-        var preset = allPresets.FirstOrDefault(p =>
-            p.Name.Equals(argument, StringComparison.OrdinalIgnoreCase));
+        var preset = PresetManager.GetPresetByName(argument);
 
         if (preset != null)
         {
@@ -160,6 +158,8 @@ public sealed class Plugin : IDalamudPlugin
                 Type = NotificationType.Error,
                 Title = "Preset Manager"
             });
+
+            var allPresets = PresetManager.GetAllPresets();
             if (allPresets.Any())
             {
                 ChatGui.Print("[Preset] Available presets:");
@@ -185,7 +185,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         MainWindow.FocusSettingsTab();
     }
-    
+
     private void EnsureAlwaysOn()
     {
         var thisPluginInternalName = PluginInterface.InternalName;
@@ -223,15 +223,14 @@ public sealed class Plugin : IDalamudPlugin
         if (defaultPresetApplied)
             return;
 
-        var config = PresetManager.CurrentConfig;
-        if (!config.DefaultPresetId.HasValue)
+        var defaultPresetName = PresetManager.DefaultPreset;
+        if (string.IsNullOrEmpty(defaultPresetName))
             return;
 
         defaultPresetApplied = true;
         ClientState.Login -= OnLogin;
 
-        var defaultPreset = PresetManager.GetAllPresets()
-            .FirstOrDefault(p => p.Id == config.DefaultPresetId.Value);
+        var defaultPreset = PresetManager.GetPresetByName(defaultPresetName);
 
         if (defaultPreset != null)
         {
@@ -240,7 +239,7 @@ public sealed class Plugin : IDalamudPlugin
         }
         else
         {
-            Log.Warning($"Default preset ID {config.DefaultPresetId.Value} not found");
+            Log.Warning($"Default preset '{defaultPresetName}' not found");
         }
     }
 
