@@ -24,6 +24,8 @@ public class CharacterData
 
     public string? LastAppliedPreset { get; set; }
 
+    public bool LastAppliedWasAlwaysOn { get; set; } = false;
+
     public NotificationMode NotificationMode { get; set; } = NotificationMode.Toast;
 
     public string DisplayName => string.IsNullOrEmpty(World)

@@ -38,6 +38,8 @@ public class Configuration : IPluginConfiguration
 
     public bool UseExperimentalPersistence { get; set; } = false;
 
+    public bool ShowDtrBar { get; set; } = false;
+
     public ulong LastSelectedCharacterId { get; set; } = 0;
 
     [JsonProperty]

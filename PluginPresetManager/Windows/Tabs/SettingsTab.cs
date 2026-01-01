@@ -70,6 +70,22 @@ public class SettingsTab
 
         UIHelpers.VerticalSpacing(Sizing.SpacingLarge);
 
+        UIHelpers.SectionHeader("Server Info Bar", FontAwesomeIcon.Bars);
+
+        var showDtrBar = GlobalConfig.ShowDtrBar;
+        if (ImGui.Checkbox("Show preset selector in Server Info Bar", ref showDtrBar))
+        {
+            GlobalConfig.ShowDtrBar = showDtrBar;
+            plugin.SaveConfiguration();
+            plugin.UpdateDtrBarVisibility();
+        }
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip("Adds a clickable entry to quickly switch presets.");
+        }
+
+        UIHelpers.VerticalSpacing(Sizing.SpacingLarge);
+
         UIHelpers.SectionHeader("Advanced", FontAwesomeIcon.Cog);
 
         var useExperimental = GlobalConfig.UseExperimentalPersistence;
@@ -80,12 +96,7 @@ public class SettingsTab
         }
         if (ImGui.IsItemHovered())
         {
-            UIHelpers.BeginTooltip("Experimental Feature");
-            ImGui.TextColored(Colors.Warning, "Plugin states will persist across game restarts.");
-            ImGui.Spacing();
-            ImGui.TextWrapped("Uses internal Dalamud APIs via reflection.");
-            ImGui.TextWrapped("May break on Dalamud updates.");
-            UIHelpers.EndTooltip();
+            ImGui.SetTooltip("Plugin states persist across restarts.\nUses internal Dalamud APIs - may break on updates.");
         }
 
         UIHelpers.VerticalSpacing(Sizing.SpacingLarge);

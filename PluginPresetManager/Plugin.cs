@@ -1,11 +1,15 @@
 using System;
 using System.Linq;
 using Dalamud.Game.Command;
+using Dalamud.Game.Gui.Dtr;
+using Dalamud.Game.Text.SeStringHandling;
+using Dalamud.Game.Text.SeStringHandling.Payloads;
 using Dalamud.IoC;
 using Dalamud.Plugin;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using PluginPresetManager.Windows;
+using Dalamud.Interface;
 using Dalamud.Interface.ImGuiNotification;
 
 namespace PluginPresetManager;
@@ -24,6 +28,9 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static INotificationManager NotificationManager { get; private set; } = null!;
     [PluginService] internal static IPlayerState PlayerState { get; private set; } = null!;
     [PluginService] internal static IObjectTable ObjectTable { get; private set; } = null!;
+    [PluginService] internal static IDtrBar DtrBar { get; private set; } = null!;
+
+    private IDtrBarEntry? dtrBarEntry;
 
     public Configuration Configuration { get; init; }
     public CharacterStorage CharacterStorage { get; init; }
@@ -31,6 +38,7 @@ public sealed class Plugin : IDalamudPlugin
 
     public readonly WindowSystem WindowSystem = new("PluginPresetManager");
     private MainWindow MainWindow { get; init; }
+    private DtrPopupWindow DtrPopupWindow { get; init; }
 
     private bool defaultPresetApplied = false;
 
@@ -78,8 +86,10 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         MainWindow = new MainWindow(this);
+        DtrPopupWindow = new DtrPopupWindow(this);
 
         WindowSystem.AddWindow(MainWindow);
+        WindowSystem.AddWindow(DtrPopupWindow);
 
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
@@ -95,11 +105,98 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenConfigUi += OpenConfigUi;
         PluginInterface.UiBuilder.OpenMainUi += ToggleMainUi;
 
+        if (Configuration.ShowDtrBar)
+        {
+            InitializeDtrBar();
+        }
+        Framework.Update += OnFrameworkUpdate;
+
         Log.Info($"Plugin Preset Manager loaded successfully");
+    }
+
+    private void InitializeDtrBar()
+    {
+        if (dtrBarEntry != null)
+            return;
+
+        try
+        {
+            dtrBarEntry = DtrBar.Get("Preset Manager");
+            dtrBarEntry.OnClick = _ => DtrPopupWindow.Toggle();
+            UpdateDtrBarText();
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Failed to initialize DTR bar entry");
+        }
+    }
+
+    private void RemoveDtrBar()
+    {
+        if (dtrBarEntry != null)
+        {
+            dtrBarEntry.Remove();
+            dtrBarEntry = null;
+        }
+    }
+
+    public void UpdateDtrBarVisibility()
+    {
+        if (Configuration.ShowDtrBar)
+        {
+            InitializeDtrBar();
+        }
+        else
+        {
+            RemoveDtrBar();
+        }
+    }
+
+    private void OnFrameworkUpdate(IFramework framework)
+    {
+        try
+        {
+            if (dtrBarEntry == null || dtrBarEntry.UserHidden || !Configuration.ShowDtrBar)
+                return;
+
+            UpdateDtrBarText();
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Error updating DTR bar");
+        }
+    }
+
+    private void UpdateDtrBarText()
+    {
+        if (dtrBarEntry == null)
+            return;
+
+        string presetText;
+
+        if (PresetManager.IsApplying)
+        {
+            presetText = "...";
+        }
+        else if (PresetManager.WasLastAppliedAlwaysOn)
+        {
+            presetText = "Always-On";
+        }
+        else
+        {
+            var lastPreset = PresetManager.GetLastAppliedPreset();
+            presetText = lastPreset?.Name ?? "None";
+        }
+
+        dtrBarEntry.Text = new SeString(new TextPayload($"PPM: {presetText}"));
     }
 
     public void Dispose()
     {
+        Framework.Update -= OnFrameworkUpdate;
+
+        RemoveDtrBar();
+
         ClientState.Login -= OnLogin;
 
         PluginInterface.UiBuilder.Draw -= WindowSystem.Draw;

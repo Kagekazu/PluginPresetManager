@@ -103,6 +103,8 @@ public class PresetManager
         return GetPresetByName(currentData.LastAppliedPreset);
     }
 
+    public bool WasLastAppliedAlwaysOn => currentData?.LastAppliedWasAlwaysOn ?? false;
+
     public void AddPreset(Preset preset)
     {
         if (currentData == null) return;
@@ -299,6 +301,7 @@ public class PresetManager
             await ApplyChangesAsync(toDisable, toEnable, installedPlugins, progress);
 
             currentData.LastAppliedPreset = null;
+            currentData.LastAppliedWasAlwaysOn = true;
             Save();
 
             ShowNotification($"Applied always-on only mode ({toEnable.Count} enabled, {toDisable.Count} disabled)");
@@ -353,6 +356,7 @@ public class PresetManager
             await ApplyChangesAsync(toDisable, toEnable, installedPlugins, progress);
 
             currentData.LastAppliedPreset = preset.Name;
+            currentData.LastAppliedWasAlwaysOn = false;
             Save();
 
             ShowNotification($"Applied '{preset.Name}' ({toEnable.Count} enabled, {toDisable.Count} disabled)");
