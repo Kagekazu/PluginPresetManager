@@ -7,11 +7,9 @@ using Dalamud.Plugin.Services;
 
 namespace PluginPresetManager;
 
-/// <summary>
-/// Helper class to access Dalamud's internal ProfileManager via reflection.
-/// This allows persistent plugin enable/disable states that survive game restarts.
-/// WARNING: This uses internal APIs and may break on Dalamud updates.
-/// </summary>
+// Uses reflection to access Dalamud's internal ProfileManager.
+// This makes plugin states persist across game restarts.
+// May break on Dalamud updates since it uses internal APIs.
 public class DalamudReflectionHelper
 {
     private readonly IPluginLog log;
@@ -46,43 +44,39 @@ public class DalamudReflectionHelper
 
         try
         {
-            log.Info("Attempting to initialize Dalamud reflection helper...");
+            log.Info("Initializing reflection helper...");
 
-            // Get Dalamud assembly
             dalamudAssembly = AppDomain.CurrentDomain.GetAssemblies()
                 .FirstOrDefault(a => a.GetName().Name == "Dalamud");
 
             if (dalamudAssembly == null)
             {
-                log.Warning("Could not find Dalamud assembly");
+                log.Warning("Dalamud assembly not found");
                 initializationFailed = true;
                 return false;
             }
 
-            // Get Service<T> type
             serviceType = dalamudAssembly.GetType("Dalamud.Service`1");
             if (serviceType == null)
             {
-                log.Warning("Could not find Service<T> type");
+                log.Warning("Service<T> type not found");
                 initializationFailed = true;
                 return false;
             }
 
-            // Get ProfileManager type
             profileManagerType = dalamudAssembly.GetType("Dalamud.Plugin.Internal.Profiles.ProfileManager");
             if (profileManagerType == null)
             {
-                log.Warning("Could not find ProfileManager type");
+                log.Warning("ProfileManager type not found");
                 initializationFailed = true;
                 return false;
             }
 
-            // Get Service<ProfileManager>.Get()
             var genericService = serviceType.MakeGenericType(profileManagerType);
             var getMethod = genericService.GetMethod("Get", BindingFlags.Static | BindingFlags.Public);
             if (getMethod == null)
             {
-                log.Warning("Could not find Service<ProfileManager>.Get method");
+                log.Warning("Service<ProfileManager>.Get not found");
                 initializationFailed = true;
                 return false;
             }
@@ -95,11 +89,10 @@ public class DalamudReflectionHelper
                 return false;
             }
 
-            // Get DefaultProfile property
             var defaultProfileProp = profileManagerType.GetProperty("DefaultProfile");
             if (defaultProfileProp == null)
             {
-                log.Warning("Could not find DefaultProfile property");
+                log.Warning("DefaultProfile property not found");
                 initializationFailed = true;
                 return false;
             }
@@ -112,7 +105,6 @@ public class DalamudReflectionHelper
                 return false;
             }
 
-            // Get AddOrUpdateAsync method from Profile
             var profileType = defaultProfile.GetType();
             addOrUpdateMethod = profileType.GetMethod("AddOrUpdateAsync",
                 BindingFlags.Instance | BindingFlags.Public,
@@ -122,24 +114,23 @@ public class DalamudReflectionHelper
 
             if (addOrUpdateMethod == null)
             {
-                log.Warning("Could not find AddOrUpdateAsync method");
+                log.Warning("AddOrUpdateAsync method not found");
                 initializationFailed = true;
                 return false;
             }
 
-            // Get EffectiveWorkingPluginId property from LocalPlugin
             var localPluginType = dalamudAssembly.GetType("Dalamud.Plugin.Internal.Types.LocalPlugin");
             if (localPluginType != null)
             {
                 workingPluginIdProperty = localPluginType.GetProperty("EffectiveWorkingPluginId");
             }
 
-            log.Info("Dalamud reflection helper initialized successfully");
+            log.Info("Reflection helper ready");
             return true;
         }
         catch (Exception ex)
         {
-            log.Error(ex, "Failed to initialize Dalamud reflection helper");
+            log.Error(ex, "Failed to initialize reflection helper");
             initializationFailed = true;
             return false;
         }
@@ -149,27 +140,25 @@ public class DalamudReflectionHelper
     {
         if (!IsAvailable)
         {
-            log.Warning("Reflection helper not available, cannot set persistent state");
+            log.Warning("Reflection helper not available");
             return false;
         }
 
         try
         {
-            // Get the working plugin ID via reflection
             var workingId = GetWorkingPluginId(plugin);
             if (workingId == Guid.Empty)
             {
-                log.Warning($"Could not get working plugin ID for {plugin.InternalName}");
+                log.Warning($"Could not get plugin ID for {plugin.InternalName}");
                 return false;
             }
 
-            // Call AddOrUpdateAsync
             var task = (Task?)addOrUpdateMethod!.Invoke(defaultProfile, new object[]
             {
                 workingId,
                 plugin.InternalName,
                 enabled,
-                true // apply immediately
+                true
             });
 
             if (task != null)
@@ -177,12 +166,12 @@ public class DalamudReflectionHelper
                 await task;
             }
 
-            log.Info($"Set persistent state for {plugin.InternalName}: enabled={enabled}");
+            log.Info($"Set persistent state: {plugin.InternalName} = {enabled}");
             return true;
         }
         catch (Exception ex)
         {
-            log.Error(ex, $"Failed to set persistent state for {plugin.InternalName}");
+            log.Error(ex, $"Failed to set state for {plugin.InternalName}");
             return false;
         }
     }
@@ -191,11 +180,9 @@ public class DalamudReflectionHelper
     {
         try
         {
-            // IExposedPlugin is actually an ExposedPlugin wrapper that has a reference to LocalPlugin
-            // We need to get the LocalPlugin from the ExposedPlugin wrapper
+            // Try to get the LocalPlugin from the wrapper
             var exposedPluginType = plugin.GetType();
 
-            // Try to find the LocalPlugin field/property in ExposedPlugin
             var localPluginField = exposedPluginType.GetField("localPlugin", BindingFlags.Instance | BindingFlags.NonPublic);
             if (localPluginField == null)
             {
@@ -209,7 +196,6 @@ public class DalamudReflectionHelper
             }
             else
             {
-                // Try property
                 var localPluginProp = exposedPluginType.GetProperty("LocalPlugin", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
                 if (localPluginProp != null)
                 {
@@ -226,13 +212,12 @@ public class DalamudReflectionHelper
                 }
             }
 
-            // Alternative: try to find it in the ProfileManager's plugin list
-            // This is more reliable as we can match by InternalName
+            // Fall back to searching in PluginManager
             return GetWorkingPluginIdFromProfileManager(plugin.InternalName);
         }
         catch (Exception ex)
         {
-            log.Error(ex, $"Failed to get working plugin ID for {plugin.InternalName}");
+            log.Error(ex, $"Failed to get plugin ID for {plugin.InternalName}");
             return Guid.Empty;
         }
     }
@@ -244,7 +229,6 @@ public class DalamudReflectionHelper
             if (profileManager == null || dalamudAssembly == null)
                 return Guid.Empty;
 
-            // Get PluginManager service
             var pluginManagerType = dalamudAssembly.GetType("Dalamud.Plugin.Internal.PluginManager");
             if (pluginManagerType == null)
                 return Guid.Empty;
@@ -258,7 +242,6 @@ public class DalamudReflectionHelper
             if (pluginManager == null)
                 return Guid.Empty;
 
-            // Get InstalledPlugins from PluginManager
             var installedPluginsProp = pluginManagerType.GetProperty("InstalledPlugins", BindingFlags.Instance | BindingFlags.Public);
             if (installedPluginsProp == null)
                 return Guid.Empty;
@@ -267,7 +250,6 @@ public class DalamudReflectionHelper
             if (installedPlugins == null)
                 return Guid.Empty;
 
-            // Find the plugin by InternalName
             foreach (var localPlugin in installedPlugins)
             {
                 var manifestProp = localPlugin.GetType().GetProperty("Manifest");
@@ -282,7 +264,6 @@ public class DalamudReflectionHelper
                 var pluginInternalName = internalNameProp.GetValue(manifest) as string;
                 if (pluginInternalName == internalName)
                 {
-                    // Found it! Get the EffectiveWorkingPluginId
                     var idProp = localPlugin.GetType().GetProperty("EffectiveWorkingPluginId");
                     if (idProp != null)
                     {
@@ -299,7 +280,7 @@ public class DalamudReflectionHelper
         }
         catch (Exception ex)
         {
-            log.Error(ex, $"Failed to get working plugin ID from PluginManager for {internalName}");
+            log.Error(ex, $"Failed to get plugin ID from PluginManager for {internalName}");
             return Guid.Empty;
         }
     }
