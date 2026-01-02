@@ -27,6 +27,7 @@ public class ManageTab
 
     private Preset? presetToDelete = null;
     private bool openDeleteModal = false;
+    private bool isSelectedPresetShared = false;
 
     private Dictionary<string, IExposedPlugin>? cachedPlugins;
     private int lastPluginCount = -1;
@@ -107,14 +108,21 @@ public class ManageTab
 
         if (presetToDelete != null)
         {
+            var isSharedPreset = presetManager.IsSharedPreset(presetToDelete);
+            var typeLabel = isSharedPreset ? "shared preset" : "preset";
+
             var result = UIHelpers.ConfirmationModal(
                 "DeletePreset",
                 "Delete Preset",
-                $"Are you sure you want to delete '{presetToDelete.Name}'?\n\nThis cannot be undone.");
+                $"Are you sure you want to delete {typeLabel} '{presetToDelete.Name}'?\n\nThis cannot be undone.");
 
             if (result == true)
             {
-                presetManager.DeletePreset(presetToDelete);
+                if (isSharedPreset)
+                    presetManager.DeleteSharedPreset(presetToDelete);
+                else
+                    presetManager.DeletePreset(presetToDelete);
+
                 if (selectedPreset?.Name == presetToDelete.Name)
                     selectedPreset = null;
                 presetToDelete = null;
@@ -204,16 +212,18 @@ public class ManageTab
             var currentSourceName = sources.First(s => s.ContentId == importSourceCharacterId).DisplayName;
 
             ImGui.SetNextItemWidth(150);
-            if (ImGui.BeginCombo("##SourceChar", currentSourceName))
+            using (var combo = ImRaii.Combo("##SourceChar", currentSourceName))
             {
-                foreach (var (name, id) in sources)
+                if (combo)
                 {
-                    if (ImGui.Selectable(name, id == importSourceCharacterId))
+                    foreach (var (name, id) in sources)
                     {
-                        importSourceCharacterId = id;
+                        if (ImGui.Selectable(name, id == importSourceCharacterId))
+                        {
+                            importSourceCharacterId = id;
+                        }
                     }
                 }
-                ImGui.EndCombo();
             }
 
             ImGui.Spacing();
@@ -275,11 +285,35 @@ public class ManageTab
 
     private void DrawLeftPanel()
     {
-        UIHelpers.SectionHeader("Presets", FontAwesomeIcon.LayerGroup);
+        var charAlwaysOnCount = presetManager.GetAlwaysOnPlugins().Count;
+        var sharedAlwaysOnCount = presetManager.GetSharedAlwaysOnPlugins().Count;
+        var totalAlwaysOn = charAlwaysOnCount + sharedAlwaysOnCount;
 
-        foreach (var preset in presetManager.GetAllPresets())
+        if (presetManager.UseAlwaysOnAsDefault)
         {
-            var isSelected = selectedPreset?.Name == preset.Name && !showAlwaysOn;
+            using (ImRaii.PushFont(UiBuilder.IconFont))
+            {
+                ImGui.TextColored(Colors.Star, FontAwesomeIcon.Star.ToIconString());
+            }
+            ImGui.SameLine();
+        }
+
+        if (ImGui.Selectable($"Always-On ({totalAlwaysOn})##alwayson", showAlwaysOn))
+        {
+            showAlwaysOn = true;
+            selectedPreset = null;
+        }
+
+        UIHelpers.VerticalSpacing(Sizing.SpacingMedium);
+        ImGui.Separator();
+        UIHelpers.VerticalSpacing(Sizing.SpacingMedium);
+
+        var characterPresets = presetManager.GetAllPresets().ToList();
+        UIHelpers.SectionHeader($"Character Presets ({characterPresets.Count})", FontAwesomeIcon.LayerGroup);
+
+        foreach (var preset in characterPresets)
+        {
+            var isSelected = selectedPreset?.Name == preset.Name && !showAlwaysOn && !isSelectedPresetShared;
             var isDefault = Data.DefaultPreset == preset.Name;
 
             if (isDefault)
@@ -295,46 +329,85 @@ public class ManageTab
             if (ImGui.Selectable(label, isSelected))
             {
                 selectedPreset = preset;
+                isSelectedPresetShared = false;
                 showAlwaysOn = false;
             }
 
-            DrawPresetContextMenu(preset);
+            DrawPresetContextMenu(preset, false);
         }
 
-        UIHelpers.VerticalSpacing(Sizing.SpacingLarge);
+        UIHelpers.VerticalSpacing(Sizing.SpacingMedium);
 
-        var alwaysOnPlugins = presetManager.GetAlwaysOnPlugins();
-        UIHelpers.SectionHeader($"Always-On ({alwaysOnPlugins.Count})", FontAwesomeIcon.Lock);
+        var sharedPresets = presetManager.GetSharedPresets().ToList();
+        UIHelpers.SectionHeader($"Shared Presets ({sharedPresets.Count})", FontAwesomeIcon.Globe);
 
-        if (presetManager.UseAlwaysOnAsDefault)
+        foreach (var preset in sharedPresets)
         {
-            using (ImRaii.PushFont(UiBuilder.IconFont))
+            var isSelected = selectedPreset?.Name == preset.Name && isSelectedPresetShared;
+            var isDefault = Data.DefaultPreset == preset.Name;
+
+            if (isDefault)
             {
-                ImGui.TextColored(Colors.Star, FontAwesomeIcon.Star.ToIconString());
+                using (ImRaii.PushFont(UiBuilder.IconFont))
+                {
+                    ImGui.TextColored(Colors.Star, FontAwesomeIcon.Star.ToIconString());
+                }
+                ImGui.SameLine();
             }
-            ImGui.SameLine();
-        }
 
-        if (ImGui.Selectable("Always-On...", showAlwaysOn))
-        {
-            showAlwaysOn = true;
-            selectedPreset = null;
+            var label = $"{preset.Name} ({preset.Plugins.Count})";
+            if (ImGui.Selectable($"{label}##shared", isSelected))
+            {
+                selectedPreset = preset;
+                isSelectedPresetShared = true;
+                showAlwaysOn = false;
+            }
+
+            DrawPresetContextMenu(preset, true);
         }
     }
 
-    private void DrawPresetContextMenu(Preset preset)
+    private void DrawPresetContextMenu(Preset preset, bool isShared)
     {
-        using var ctx = ImRaii.ContextPopupItem($"PresetCtx_{preset.Name}");
+        var suffix = isShared ? "_shared" : "";
+        using var ctx = ImRaii.ContextPopupItem($"PresetCtx_{preset.Name}{suffix}");
         if (!ctx) return;
 
         if (ImGui.MenuItem("Duplicate"))
         {
-            selectedPreset = presetManager.DuplicatePreset(preset);
+            if (isShared)
+            {
+                presetManager.CopySharedPresetToCharacter(preset);
+            }
+            else
+            {
+                selectedPreset = presetManager.DuplicatePreset(preset);
+                isSelectedPresetShared = false;
+            }
         }
         if (ImGui.MenuItem("Export to Clipboard"))
         {
             ExportPresetToClipboard(preset);
         }
+        ImGui.Separator();
+
+        if (isShared)
+        {
+            if (ImGui.MenuItem("Copy to Character"))
+            {
+                presetManager.CopySharedPresetToCharacter(preset);
+            }
+        }
+        else
+        {
+            if (ImGui.MenuItem("Move to Shared"))
+            {
+                presetManager.MovePresetToShared(preset);
+                if (selectedPreset?.Name == preset.Name)
+                    selectedPreset = null;
+            }
+        }
+
         ImGui.Separator();
         if (ImGui.MenuItem("Delete"))
         {
@@ -346,9 +419,9 @@ public class ManageTab
     private void DrawRightPanel()
     {
         if (showAlwaysOn)
-            DrawAlwaysOnEditor();
+            DrawCombinedAlwaysOnEditor();
         else if (selectedPreset != null)
-            DrawPresetEditor(selectedPreset);
+            DrawPresetEditor(selectedPreset, isSelectedPresetShared);
         else
             DrawEmptyState();
     }
@@ -358,15 +431,25 @@ public class ManageTab
         UIHelpers.EmptyState(FontAwesomeIcon.MousePointer, "Select a preset to edit");
     }
 
-    private void DrawPresetEditor(Preset preset)
+    private void DrawPresetEditor(Preset preset, bool isShared)
     {
+        if (isShared)
+        {
+            ImGui.TextColored(Colors.Header, "Shared Preset");
+            ImGui.TextColored(Colors.TextMuted, "Available to all characters");
+            ImGui.Spacing();
+        }
+
         ImGui.Text("Name");
         ImGui.SetNextItemWidth(-1);
         var name = preset.Name;
         if (ImGui.InputText("##PresetName", ref name, 100))
         {
             preset.Name = name;
-            presetManager.UpdatePreset(preset);
+            if (isShared)
+                presetManager.UpdateSharedPreset(preset);
+            else
+                presetManager.UpdatePreset(preset);
         }
 
         ImGui.Spacing();
@@ -377,21 +460,24 @@ public class ManageTab
         if (ImGui.InputTextMultiline("##PresetDesc", ref desc, 500, new Vector2(-1, 40)))
         {
             preset.Description = desc;
-            presetManager.UpdatePreset(preset);
+            if (isShared)
+                presetManager.UpdateSharedPreset(preset);
+            else
+                presetManager.UpdatePreset(preset);
         }
 
         UIHelpers.VerticalSpacing(Sizing.SpacingMedium);
 
-        DrawPresetActions(preset);
+        DrawPresetActions(preset, isShared);
 
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
 
-        DrawPresetPluginList(preset);
+        DrawPresetPluginList(preset, isShared);
     }
 
-    private void DrawPresetActions(Preset preset)
+    private void DrawPresetActions(Preset preset, bool isShared)
     {
         var isDefault = Data.DefaultPreset == preset.Name;
 
@@ -414,13 +500,21 @@ public class ManageTab
         }
         if (ImGui.IsItemHovered())
         {
-            ImGui.SetTooltip(isDefault ? "Click to unset" : "Auto-apply on login");
+            ImGui.SetTooltip(isDefault ? "Click to unset as default" : "Set as default (enable 'Apply default on login' in Settings)");
         }
-
         ImGui.SameLine();
+
         if (ImGui.Button("Duplicate", new Vector2(Sizing.ButtonMedium, 0)))
         {
-            selectedPreset = presetManager.DuplicatePreset(preset);
+            if (isShared)
+            {
+                presetManager.CopySharedPresetToCharacter(preset);
+            }
+            else
+            {
+                selectedPreset = presetManager.DuplicatePreset(preset);
+                isSelectedPresetShared = false;
+            }
         }
 
         ImGui.SameLine();
@@ -432,15 +526,41 @@ public class ManageTab
         ImGui.SameLine();
         if (ImGui.Button("Add Current", new Vector2(Sizing.ButtonLarge, 0)))
         {
-            AddCurrentlyEnabledPlugins(preset);
+            AddCurrentlyEnabledPlugins(preset, isShared);
         }
         if (ImGui.IsItemHovered())
         {
             ImGui.SetTooltip("Add all currently enabled plugins");
         }
+
+        if (isShared)
+        {
+            ImGui.SameLine();
+            if (ImGui.Button("Copy to Char", new Vector2(Sizing.ButtonLarge, 0)))
+            {
+                presetManager.CopySharedPresetToCharacter(preset);
+            }
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip("Copy this preset to the current character");
+            }
+        }
+        else
+        {
+            ImGui.SameLine();
+            if (ImGui.Button("Move to Shared", new Vector2(Sizing.ButtonLarge, 0)))
+            {
+                presetManager.MovePresetToShared(preset);
+                selectedPreset = null;
+            }
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip("Move this preset to shared (available to all characters)");
+            }
+        }
     }
 
-    private void DrawPresetPluginList(Preset preset)
+    private void DrawPresetPluginList(Preset preset, bool isShared)
     {
         ImGui.Text("Plugins");
         ImGui.SameLine();
@@ -450,7 +570,7 @@ public class ManageTab
         ImGui.Spacing();
 
         var installedPlugins = GetInstalledPlugins();
-        var alwaysOnPlugins = presetManager.GetAlwaysOnPlugins();
+        var effectiveAlwaysOn = presetManager.GetEffectiveAlwaysOnPlugins();
 
         var missingPlugins = preset.Plugins
             .Where(p => !installedPlugins.ContainsKey(p))
@@ -474,11 +594,11 @@ public class ManageTab
             ImGui.Spacing();
         }
 
-        if (alwaysOnPlugins.Count > 0)
+        if (effectiveAlwaysOn.Count > 0)
         {
             ImGui.TextColored(Colors.TextMuted, "Always-On (included automatically)");
             var anyAlwaysOnShown = false;
-            foreach (var pluginName in alwaysOnPlugins.OrderBy(p => p))
+            foreach (var pluginName in effectiveAlwaysOn.OrderBy(p => p))
             {
                 if (!MatchesFilter(pluginName, installedPlugins)) continue;
                 anyAlwaysOnShown = true;
@@ -493,6 +613,11 @@ public class ManageTab
                 {
                     ImGui.TextColored(Colors.TextMuted, info.Name);
                     DrawPluginTags(info);
+                    if (presetManager.IsSharedAlwaysOn(pluginName))
+                    {
+                        ImGui.SameLine();
+                        ImGui.TextColored(Colors.TextMuted, "[shared]");
+                    }
                 }
                 else
                 {
@@ -512,7 +637,7 @@ public class ManageTab
         var anyPluginsShown = false;
         foreach (var (key, p) in installedPlugins.OrderBy(kv => kv.Value.Name).ThenBy(kv => kv.Key))
         {
-            if (alwaysOnPlugins.Contains(key) || alwaysOnPlugins.Contains(p.InternalName)) continue;
+            if (effectiveAlwaysOn.Contains(key) || effectiveAlwaysOn.Contains(p.InternalName)) continue;
             if (!MatchesFilter(key, installedPlugins)) continue;
 
             anyPluginsShown = true;
@@ -523,7 +648,11 @@ public class ManageTab
                     preset.Plugins.Add(key);
                 else
                     preset.Plugins.Remove(key);
-                presetManager.UpdatePreset(preset);
+
+                if (isShared)
+                    presetManager.UpdateSharedPreset(preset);
+                else
+                    presetManager.UpdatePreset(preset);
             }
 
             DrawPluginTags(p);
@@ -536,12 +665,13 @@ public class ManageTab
         }
     }
 
-    private void DrawAlwaysOnEditor()
+    private void DrawCombinedAlwaysOnEditor()
     {
-        UIHelpers.SectionHeader("Always-On Plugins", FontAwesomeIcon.Lock);
-        ImGui.TextColored(Colors.TextMuted, "These plugins stay enabled regardless of preset.");
+        var charCount = presetManager.GetAlwaysOnPlugins().Count;
+        var sharedCount = presetManager.GetSharedAlwaysOnPlugins().Count;
+        var totalCount = charCount + sharedCount;
 
-        UIHelpers.VerticalSpacing(Sizing.SpacingMedium);
+        UIHelpers.SectionHeader($"Always-On Plugins ({totalCount})", FontAwesomeIcon.Lock);
 
         var isDefault = presetManager.UseAlwaysOnAsDefault;
         if (isDefault)
@@ -563,10 +693,46 @@ public class ManageTab
         }
         if (ImGui.IsItemHovered())
         {
-            ImGui.SetTooltip(isDefault ? "Click to unset" : "Auto-apply on login (disables all except always-on)");
+            var tooltip = isDefault
+                ? "Click to unset as default"
+                : $"Set as default ({charCount} character + {sharedCount} shared)\nEnable 'Apply default on login' in Settings";
+            ImGui.SetTooltip(tooltip);
         }
 
+        ImGui.SameLine();
+        ImGui.TextColored(Colors.TextMuted, $"{charCount} character + {sharedCount} shared");
+
         UIHelpers.VerticalSpacing(Sizing.SpacingMedium);
+
+        using (var tabBar = ImRaii.TabBar("AlwaysOnTabs"))
+        {
+            if (!tabBar) return;
+
+            using (var charTab = ImRaii.TabItem($"Character ({charCount})"))
+            {
+                if (charTab)
+                {
+                    ImGui.Spacing();
+                    ImGui.TextColored(Colors.TextMuted, "Plugins always enabled for this character.");
+                    DrawCharacterAlwaysOnList();
+                }
+            }
+
+            using (var sharedTab = ImRaii.TabItem($"Shared ({sharedCount})"))
+            {
+                if (sharedTab)
+                {
+                    ImGui.Spacing();
+                    ImGui.TextColored(Colors.TextMuted, "Plugins always enabled for ALL characters.");
+                    DrawSharedAlwaysOnList();
+                }
+            }
+        }
+    }
+
+    private void DrawCharacterAlwaysOnList()
+    {
+        UIHelpers.VerticalSpacing(Sizing.SpacingSmall);
 
         ImGui.Text("Search");
         ImGui.SameLine();
@@ -579,10 +745,37 @@ public class ManageTab
 
         var installedPlugins = GetInstalledPlugins();
         var alwaysOnPlugins = presetManager.GetAlwaysOnPlugins();
+        var sharedAlwaysOn = presetManager.GetSharedAlwaysOnPlugins();
         var thisPluginName = Plugin.PluginInterface.InternalName;
 
-        using var child = ImRaii.Child("AlwaysOnList", new Vector2(0, 0), false);
+        var duplicates = alwaysOnPlugins.Where(p => sharedAlwaysOn.Contains(p)).ToList();
+
+        using var child = ImRaii.Child("CharAlwaysOnList", new Vector2(0, 0), false);
         if (!child) return;
+
+        if (duplicates.Count > 0)
+        {
+            ImGui.TextColored(Colors.Warning, $"Redundant ({duplicates.Count}) - already in shared:");
+            foreach (var dup in duplicates)
+            {
+                var displayName = installedPlugins.TryGetValue(dup, out var info) ? info.Name : dup;
+                ImGui.TextColored(Colors.TextMuted, $"  • {displayName}");
+            }
+            if (ImGui.Button("Remove Redundant"))
+            {
+                foreach (var dup in duplicates)
+                {
+                    presetManager.RemoveAlwaysOnPlugin(dup);
+                }
+            }
+            if (ImGui.IsItemHovered())
+            {
+                ImGui.SetTooltip("Remove these from character always-on since they're already in shared");
+            }
+            ImGui.Spacing();
+            ImGui.Separator();
+            ImGui.Spacing();
+        }
 
         var anyPluginsShown = false;
         foreach (var (key, p) in installedPlugins.OrderBy(kv => kv.Value.Name).ThenBy(kv => kv.Key))
@@ -591,6 +784,7 @@ public class ManageTab
 
             anyPluginsShown = true;
             var isAlwaysOn = alwaysOnPlugins.Contains(key);
+            var isSharedAlwaysOn = sharedAlwaysOn.Contains(key);
             var isThisPlugin = p.InternalName == thisPluginName && !p.IsDev;
 
             if (isThisPlugin)
@@ -606,8 +800,21 @@ public class ManageTab
                 ImGui.SameLine();
                 using (ImRaii.PushColor(ImGuiCol.Text, Colors.Warning))
                 {
-                    ImGui.Text("(this plugin - always required)");
+                    ImGui.Text("(required)");
                 }
+            }
+            else if (isSharedAlwaysOn)
+            {
+                using (ImRaii.Disabled())
+                {
+                    var check = true;
+                    ImGui.Checkbox($"##{key}_ao", ref check);
+                }
+                ImGui.SameLine();
+                ImGui.Text(p.Name);
+                DrawPluginTags(p);
+                ImGui.SameLine();
+                ImGui.TextColored(Colors.TextMuted, "(in shared)");
             }
             else
             {
@@ -617,6 +824,86 @@ public class ManageTab
                         presetManager.AddAlwaysOnPlugin(key);
                     else
                         presetManager.RemoveAlwaysOnPlugin(key);
+                }
+                DrawPluginTags(p);
+            }
+        }
+
+        if (!anyPluginsShown && !string.IsNullOrEmpty(searchFilter))
+        {
+            ImGui.Spacing();
+            ImGui.TextColored(Colors.TextMuted, "No plugins match your search.");
+        }
+    }
+
+    private void DrawSharedAlwaysOnList()
+    {
+        UIHelpers.VerticalSpacing(Sizing.SpacingSmall);
+
+        ImGui.Text("Search");
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(Sizing.InputMedium);
+        ImGui.InputTextWithHint("##SharedAOSearch", "Filter...", ref searchFilter, 100);
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        var installedPlugins = GetInstalledPlugins();
+        var sharedAlwaysOn = presetManager.GetSharedAlwaysOnPlugins();
+        var characterAlwaysOn = presetManager.GetAlwaysOnPlugins();
+        var thisPluginName = Plugin.PluginInterface.InternalName;
+
+        using var child = ImRaii.Child("SharedAlwaysOnList", new Vector2(0, 0), false);
+        if (!child) return;
+
+        var anyPluginsShown = false;
+        foreach (var (key, p) in installedPlugins.OrderBy(kv => kv.Value.Name).ThenBy(kv => kv.Key))
+        {
+            if (!MatchesFilter(key, installedPlugins)) continue;
+
+            anyPluginsShown = true;
+            var isSharedAlwaysOn = sharedAlwaysOn.Contains(key);
+            var isCharacterAlwaysOn = characterAlwaysOn.Contains(key);
+            var isThisPlugin = p.InternalName == thisPluginName && !p.IsDev;
+
+            if (isThisPlugin)
+            {
+                using (ImRaii.Disabled())
+                {
+                    var check = true;
+                    ImGui.Checkbox($"##{key}_sao", ref check);
+                }
+                ImGui.SameLine();
+                ImGui.Text(p.Name);
+                DrawPluginTags(p);
+                ImGui.SameLine();
+                using (ImRaii.PushColor(ImGuiCol.Text, Colors.Warning))
+                {
+                    ImGui.Text("(required)");
+                }
+            }
+            else if (isCharacterAlwaysOn)
+            {
+                using (ImRaii.Disabled())
+                {
+                    var check = isSharedAlwaysOn;
+                    ImGui.Checkbox($"##{key}_sao", ref check);
+                }
+                ImGui.SameLine();
+                ImGui.Text(p.Name);
+                DrawPluginTags(p);
+                ImGui.SameLine();
+                ImGui.TextColored(Colors.TextMuted, "(in character)");
+            }
+            else
+            {
+                if (ImGui.Checkbox($"{p.Name}##{key}_sao", ref isSharedAlwaysOn))
+                {
+                    if (isSharedAlwaysOn)
+                        presetManager.AddSharedAlwaysOnPlugin(key);
+                    else
+                        presetManager.RemoveSharedAlwaysOnPlugin(key);
                 }
                 DrawPluginTags(p);
             }
@@ -657,24 +944,29 @@ public class ManageTab
         return false;
     }
 
-    private void AddCurrentlyEnabledPlugins(Preset preset)
+    private void AddCurrentlyEnabledPlugins(Preset preset, bool isShared)
     {
-        var alwaysOn = presetManager.GetAlwaysOnPlugins();
+        var effectiveAlwaysOn = presetManager.GetEffectiveAlwaysOnPlugins();
         var added = 0;
         foreach (var p in Plugin.PluginInterface.InstalledPlugins)
         {
             var key = GetPluginKey(p);
             if (p.IsLoaded &&
                 !preset.Plugins.Contains(key) &&
-                !alwaysOn.Contains(key) &&
-                !alwaysOn.Contains(p.InternalName))
+                !effectiveAlwaysOn.Contains(key) &&
+                !effectiveAlwaysOn.Contains(p.InternalName))
             {
                 preset.Plugins.Add(key);
                 added++;
             }
         }
         if (added > 0)
-            presetManager.UpdatePreset(preset);
+        {
+            if (isShared)
+                presetManager.UpdateSharedPreset(preset);
+            else
+                presetManager.UpdatePreset(preset);
+        }
     }
 
     private void ExportPresetToClipboard(Preset preset)

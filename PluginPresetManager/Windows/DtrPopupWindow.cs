@@ -1,5 +1,6 @@
 using System.Numerics;
 using Dalamud.Interface.Windowing;
+using Dalamud.Interface.Utility.Raii;
 using Dalamud.Bindings.ImGui;
 using PluginPresetManager.UI;
 
@@ -60,7 +61,6 @@ public class DtrPopupWindow : Window
         isHovered = ImGui.IsWindowHovered(ImGuiHoveredFlags.RootAndChildWindows);
         var width = 160f;
 
-        // Close on right-click or escape
         if (ImGui.IsMouseClicked(ImGuiMouseButton.Right) || ImGui.IsKeyPressed(ImGuiKey.Escape))
         {
             IsOpen = false;
@@ -81,7 +81,6 @@ public class DtrPopupWindow : Window
             return;
         }
 
-        // Auto-close after applying finishes
         if (wasApplying)
         {
             wasApplying = false;
@@ -90,10 +89,11 @@ public class DtrPopupWindow : Window
         }
 
         var presets = presetManager.GetAllPresets();
+        var sharedPresets = presetManager.GetSharedPresets();
         var lastApplied = presetManager.GetLastAppliedPreset();
         var isAlwaysOnActive = presetManager.WasLastAppliedAlwaysOn;
 
-        if (presets.Count == 0)
+        if (presets.Count == 0 && sharedPresets.Count == 0)
         {
             ImGui.TextColored(Colors.TextDisabled, "No presets");
             if (DrawMenuItem("Open Manager...", false))
@@ -111,6 +111,25 @@ public class DtrPopupWindow : Window
             if (DrawMenuItem(preset.Name, isActive))
             {
                 _ = presetManager.ApplyPresetAsync(preset);
+            }
+        }
+
+        if (sharedPresets.Count > 0)
+        {
+            if (presets.Count > 0)
+            {
+                ImGui.Spacing();
+                ImGui.TextColored(Colors.TextMuted, "  Shared");
+            }
+
+            foreach (var preset in sharedPresets)
+            {
+                var isActive = lastApplied?.Name == preset.Name && !isAlwaysOnActive;
+
+                if (DrawMenuItem(preset.Name, isActive))
+                {
+                    _ = presetManager.ApplyPresetAsync(preset);
+                }
             }
         }
 
@@ -143,22 +162,19 @@ public class DtrPopupWindow : Window
     {
         var width = 160f;
 
-        if (isActive)
-        {
-            ImGui.PushStyleColor(ImGuiCol.Header, new Vector4(0.2f, 0.4f, 0.2f, 1f));
-            ImGui.PushStyleColor(ImGuiCol.HeaderHovered, new Vector4(0.25f, 0.5f, 0.25f, 1f));
-        }
-        else
-        {
-            ImGui.PushStyleColor(ImGuiCol.Header, new Vector4(0f, 0f, 0f, 0f));
-            ImGui.PushStyleColor(ImGuiCol.HeaderHovered, new Vector4(0.3f, 0.3f, 0.3f, 1f));
-        }
+        var headerColor = isActive
+            ? new Vector4(0.2f, 0.4f, 0.2f, 1f)
+            : new Vector4(0f, 0f, 0f, 0f);
+        var hoverColor = isActive
+            ? new Vector4(0.25f, 0.5f, 0.25f, 1f)
+            : new Vector4(0.3f, 0.3f, 0.3f, 1f);
 
-        var displayLabel = isActive ? $"> {label}" : $"   {label}";
-        var result = ImGui.Selectable(displayLabel, false, ImGuiSelectableFlags.None, new Vector2(width, 0));
-
-        ImGui.PopStyleColor(2);
-        return result;
+        using (ImRaii.PushColor(ImGuiCol.Header, headerColor))
+        using (ImRaii.PushColor(ImGuiCol.HeaderHovered, hoverColor))
+        {
+            var displayLabel = isActive ? $"> {label}" : $"   {label}";
+            return ImGui.Selectable(displayLabel, false, ImGuiSelectableFlags.None, new Vector2(width, 0));
+        }
     }
 
     public new void Toggle()

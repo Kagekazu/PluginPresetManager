@@ -161,37 +161,38 @@ public static class UIHelpers
         bool? result = null;
 
         ImGui.SetNextWindowSize(new Vector2(300, 0));
-        if (ImGui.BeginPopupModal($"{title}##{id}", ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoMove))
+        using (var popup = ImRaii.PopupModal($"{title}##{id}", ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoMove))
         {
-            ImGui.TextWrapped(message);
-            VerticalSpacing(Sizing.SpacingLarge);
-
-            var buttonWidth = 80f;
-            var spacing = 10f;
-            var totalWidth = buttonWidth * 2 + spacing;
-            var startX = (ImGui.GetContentRegionAvail().X - totalWidth) * 0.5f;
-
-            ImGui.SetCursorPosX(ImGui.GetCursorPosX() + startX);
-
-            using (ImRaii.PushColor(ImGuiCol.Button, new Vector4(0.7f, 0.2f, 0.2f, 1f)))
-            using (ImRaii.PushColor(ImGuiCol.ButtonHovered, new Vector4(0.8f, 0.3f, 0.3f, 1f)))
+            if (popup)
             {
-                if (ImGui.Button(confirmText, new Vector2(buttonWidth, 0)))
+                ImGui.TextWrapped(message);
+                VerticalSpacing(Sizing.SpacingLarge);
+
+                var buttonWidth = 80f;
+                var spacing = 10f;
+                var totalWidth = buttonWidth * 2 + spacing;
+                var startX = (ImGui.GetContentRegionAvail().X - totalWidth) * 0.5f;
+
+                ImGui.SetCursorPosX(ImGui.GetCursorPosX() + startX);
+
+                using (ImRaii.PushColor(ImGuiCol.Button, new Vector4(0.7f, 0.2f, 0.2f, 1f)))
+                using (ImRaii.PushColor(ImGuiCol.ButtonHovered, new Vector4(0.8f, 0.3f, 0.3f, 1f)))
                 {
-                    result = true;
+                    if (ImGui.Button(confirmText, new Vector2(buttonWidth, 0)))
+                    {
+                        result = true;
+                        ImGui.CloseCurrentPopup();
+                    }
+                }
+
+                ImGui.SameLine(0, spacing);
+
+                if (ImGui.Button(cancelText, new Vector2(buttonWidth, 0)))
+                {
+                    result = false;
                     ImGui.CloseCurrentPopup();
                 }
             }
-
-            ImGui.SameLine(0, spacing);
-
-            if (ImGui.Button(cancelText, new Vector2(buttonWidth, 0)))
-            {
-                result = false;
-                ImGui.CloseCurrentPopup();
-            }
-
-            ImGui.EndPopup();
         }
 
         return result;

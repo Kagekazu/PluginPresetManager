@@ -14,9 +14,13 @@ public class CharacterStorage
     private readonly IPluginLog log;
     private readonly string baseDirectory;
     private readonly string charactersDirectory;
+    private readonly string sharedDataPath;
 
     private Dictionary<ulong, CharacterData> characters = new();
     private CharacterData? pendingMigrationData;
+    private SharedData sharedData = new();
+
+    public SharedData SharedData => sharedData;
 
     public CharacterStorage(IDalamudPluginInterface pluginInterface, IPluginLog log)
     {
@@ -24,10 +28,12 @@ public class CharacterStorage
 
         baseDirectory = pluginInterface.ConfigDirectory.FullName;
         charactersDirectory = Path.Combine(baseDirectory, "characters");
+        sharedDataPath = Path.Combine(baseDirectory, "shared.json");
 
         Directory.CreateDirectory(charactersDirectory);
 
         LoadAll();
+        LoadSharedData();
         CheckForPendingMigration();
 
         log.Info($"CharacterStorage initialized at: {baseDirectory}");
@@ -182,6 +188,40 @@ public class CharacterStorage
         {
             log.Error(ex, $"Failed to load: {filePath}");
             return null;
+        }
+    }
+
+    private void LoadSharedData()
+    {
+        if (!File.Exists(sharedDataPath))
+        {
+            sharedData = new SharedData();
+            return;
+        }
+
+        try
+        {
+            var json = File.ReadAllText(sharedDataPath);
+            sharedData = JsonConvert.DeserializeObject<SharedData>(json) ?? new SharedData();
+            log.Info($"Loaded shared data: {sharedData.Presets.Count} presets, {sharedData.AlwaysOn.Count} always-on");
+        }
+        catch (Exception ex)
+        {
+            log.Error(ex, "Failed to load shared data");
+            sharedData = new SharedData();
+        }
+    }
+
+    public void SaveSharedData()
+    {
+        try
+        {
+            var json = JsonConvert.SerializeObject(sharedData, Formatting.Indented);
+            File.WriteAllText(sharedDataPath, json);
+        }
+        catch (Exception ex)
+        {
+            log.Error(ex, "Failed to save shared data");
         }
     }
 

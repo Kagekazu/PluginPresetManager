@@ -40,7 +40,7 @@ public sealed class Plugin : IDalamudPlugin
     private MainWindow MainWindow { get; init; }
     private DtrPopupWindow DtrPopupWindow { get; init; }
 
-    private bool defaultPresetApplied = false;
+    private ulong lastDefaultPresetAppliedForCharacter = 0;
 
     public Plugin()
     {
@@ -61,6 +61,7 @@ public sealed class Plugin : IDalamudPlugin
             CharacterStorage);
 
         ClientState.Login += OnLogin;
+        ClientState.Logout += OnLogout;
 
         if (ClientState.IsLoggedIn && PlayerState.ContentId != 0)
         {
@@ -198,6 +199,7 @@ public sealed class Plugin : IDalamudPlugin
         RemoveDtrBar();
 
         ClientState.Login -= OnLogin;
+        ClientState.Logout -= OnLogout;
 
         PluginInterface.UiBuilder.Draw -= WindowSystem.Draw;
         PluginInterface.UiBuilder.OpenConfigUi -= OpenConfigUi;
@@ -300,21 +302,29 @@ public sealed class Plugin : IDalamudPlugin
                 Log.Info($"Character logged in: {name} @ {world}");
 
                 EnsureAlwaysOn();
+                ApplyDefaultPreset();
             }
-
-            ApplyDefaultPreset();
         });
+    }
+
+    private void OnLogout(int type, int code)
+    {
+        Log.Info("Character logged out, resetting state");
+        lastDefaultPresetAppliedForCharacter = 0;
     }
 
     private async void ApplyDefaultPreset()
     {
-        if (defaultPresetApplied)
+        var currentCharacterId = PlayerState.ContentId;
+        if (currentCharacterId == 0 || lastDefaultPresetAppliedForCharacter == currentCharacterId)
+            return;
+
+        if (!PresetManager.ApplyDefaultOnLogin)
             return;
 
         if (PresetManager.UseAlwaysOnAsDefault)
         {
-            defaultPresetApplied = true;
-            ClientState.Login -= OnLogin;
+            lastDefaultPresetAppliedForCharacter = currentCharacterId;
 
             try
             {
@@ -339,8 +349,7 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
-        defaultPresetApplied = true;
-        ClientState.Login -= OnLogin;
+        lastDefaultPresetAppliedForCharacter = currentCharacterId;
 
         try
         {

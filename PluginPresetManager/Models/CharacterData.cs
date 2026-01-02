@@ -22,6 +22,8 @@ public class CharacterData
 
     public bool UseAlwaysOnAsDefault { get; set; } = false;
 
+    public bool ApplyDefaultOnLogin { get; set; } = false;
+
     public string? LastAppliedPreset { get; set; }
 
     public bool LastAppliedWasAlwaysOn { get; set; } = false;

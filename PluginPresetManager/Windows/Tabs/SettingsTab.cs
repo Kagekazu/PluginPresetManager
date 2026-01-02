@@ -45,28 +45,34 @@ public class SettingsTab
 
         UIHelpers.SectionHeader("Login Behavior", FontAwesomeIcon.SignInAlt);
 
-        var useAlwaysOn = presetManager.UseAlwaysOnAsDefault;
-        if (ImGui.Checkbox("Apply Always-On Only on login", ref useAlwaysOn))
+        var applyOnLogin = presetManager.ApplyDefaultOnLogin;
+        if (ImGui.Checkbox("Apply default on login", ref applyOnLogin))
         {
-            presetManager.SetAlwaysOnAsDefault(useAlwaysOn);
-        }
-        if (ImGui.IsItemHovered())
-        {
-            ImGui.SetTooltip("On login, disable all plugins except those marked as always-on.");
+            presetManager.SetApplyDefaultOnLogin(applyOnLogin);
         }
 
-        if (!useAlwaysOn)
+        string defaultDisplay;
+        if (presetManager.UseAlwaysOnAsDefault)
         {
-            var defaultPreset = presetManager.DefaultPreset;
-            if (!string.IsNullOrEmpty(defaultPreset))
-            {
-                ImGui.TextColored(Colors.TextMuted, $"Default preset: {defaultPreset}");
-            }
-            else
-            {
-                ImGui.TextColored(Colors.TextMuted, "No default preset set. Set one in Manage tab.");
-            }
+            var charCount = presetManager.GetAlwaysOnPlugins().Count;
+            var sharedCount = presetManager.GetSharedAlwaysOnPlugins().Count;
+            defaultDisplay = $"Always-On ({charCount} character + {sharedCount} shared)";
         }
+        else if (!string.IsNullOrEmpty(presetManager.DefaultPreset))
+        {
+            defaultDisplay = $"Preset: {presetManager.DefaultPreset}";
+        }
+        else
+        {
+            defaultDisplay = "None - set a default in Manage tab (star icon)";
+        }
+
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetTooltip($"When enabled, automatically applies the starred default on login.\nCurrent default: {defaultDisplay}");
+        }
+
+        ImGui.TextColored(Colors.TextMuted, $"Default: {defaultDisplay}");
 
         UIHelpers.VerticalSpacing(Sizing.SpacingLarge);
 

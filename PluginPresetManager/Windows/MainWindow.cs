@@ -128,32 +128,34 @@ public class MainWindow : Window, IDisposable
         ImGui.SameLine();
         ImGui.SetNextItemWidth(200);
 
-        if (ImGui.BeginCombo("##CharSelect", items[currentIndex].DisplayName))
+        using (var combo = ImRaii.Combo("##CharSelect", items[currentIndex].DisplayName))
         {
-            for (var i = 0; i < items.Count; i++)
+            if (combo)
             {
-                var isSelected = i == currentIndex;
-                var isCurrent = items[i].ContentId == Plugin.PlayerState.ContentId;
-
-                var label = items[i].DisplayName;
-                if (isCurrent)
+                for (var i = 0; i < items.Count; i++)
                 {
-                    label += " (you)";
-                }
+                    var isSelected = i == currentIndex;
+                    var isCurrent = items[i].ContentId == Plugin.PlayerState.ContentId;
 
-                if (ImGui.Selectable(label, isSelected))
-                {
-                    if (items[i].ContentId != currentId)
+                    var label = items[i].DisplayName;
+                    if (isCurrent)
                     {
-                        presetManager.SwitchCharacter(items[i].ContentId);
-                        plugin.SaveConfiguration();
+                        label += " (you)";
                     }
-                }
 
-                if (isSelected)
-                    ImGui.SetItemDefaultFocus();
+                    if (ImGui.Selectable(label, isSelected))
+                    {
+                        if (items[i].ContentId != currentId)
+                        {
+                            presetManager.SwitchCharacter(items[i].ContentId);
+                            plugin.SaveConfiguration();
+                        }
+                    }
+
+                    if (isSelected)
+                        ImGui.SetItemDefaultFocus();
+                }
             }
-            ImGui.EndCombo();
         }
     }
 }

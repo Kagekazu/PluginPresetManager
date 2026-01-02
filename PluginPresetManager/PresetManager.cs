@@ -36,6 +36,7 @@ public class PresetManager
     public bool HasCharacter => currentData != null;
     public ulong CurrentCharacterId => currentData?.ContentId ?? 0;
     public CharacterData CurrentData => currentData!;
+    public SharedData SharedData => storage.SharedData;
 
     public PresetManager(
         IDalamudPluginInterface pluginInterface,
@@ -93,8 +94,13 @@ public class PresetManager
 
     public Preset? GetPresetByName(string name)
     {
-        return currentData?.Presets.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        var preset = currentData?.Presets.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (preset != null) return preset;
+
+        return storage.SharedData.Presets.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
     }
+
+    public List<Preset> GetSharedPresets() => storage.SharedData.Presets;
 
     public Preset? GetLastAppliedPreset()
     {
@@ -111,7 +117,7 @@ public class PresetManager
 
         var baseName = preset.Name;
         var counter = 1;
-        while (currentData.Presets.Any(p => p.Name.Equals(preset.Name, StringComparison.OrdinalIgnoreCase)))
+        while (IsPresetNameTaken(preset.Name))
         {
             preset.Name = $"{baseName} ({counter++})";
         }
@@ -119,6 +125,20 @@ public class PresetManager
         currentData.Presets.Add(preset);
         Save();
         log.Info($"Added preset: {preset.Name}");
+    }
+
+    /// <summary>
+    /// Checks if a preset name is already used in either character or shared presets.
+    /// </summary>
+    public bool IsPresetNameTaken(string name, Preset? excludePreset = null)
+    {
+        var characterMatch = currentData?.Presets
+            .Any(p => p != excludePreset && p.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) ?? false;
+
+        var sharedMatch = storage.SharedData.Presets
+            .Any(p => p != excludePreset && p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+
+        return characterMatch || sharedMatch;
     }
 
     public void UpdatePreset(Preset preset)
@@ -197,11 +217,124 @@ public class PresetManager
 
     #endregion
 
+    #region Shared Preset Management
+
+    public void AddSharedPreset(Preset preset)
+    {
+        var baseName = preset.Name;
+        var counter = 1;
+        while (IsPresetNameTaken(preset.Name))
+        {
+            preset.Name = $"{baseName} ({counter++})";
+        }
+
+        storage.SharedData.Presets.Add(preset);
+        storage.SaveSharedData();
+        log.Info($"Added shared preset: {preset.Name}");
+    }
+
+    public void UpdateSharedPreset(Preset preset)
+    {
+        preset.LastModified = DateTime.Now;
+        storage.SaveSharedData();
+        log.Info($"Updated shared preset: {preset.Name}");
+    }
+
+    public void DeleteSharedPreset(Preset preset)
+    {
+        if (storage.SharedData.Presets.Remove(preset))
+        {
+            storage.SaveSharedData();
+            ShowNotification($"Deleted shared preset '{preset.Name}'");
+            log.Info($"Deleted shared preset: {preset.Name}");
+        }
+    }
+
+    public bool IsSharedPreset(Preset preset)
+    {
+        return storage.SharedData.Presets.Contains(preset);
+    }
+
+    /// <summary>
+    /// Move a character preset to shared.
+    /// </summary>
+    public void MovePresetToShared(Preset preset)
+    {
+        if (currentData == null) return;
+
+        var originalName = preset.Name;
+
+        if (currentData.Presets.Remove(preset))
+        {
+            Save();
+
+            var baseName = preset.Name;
+            var counter = 1;
+            while (storage.SharedData.Presets.Any(p => p.Name.Equals(preset.Name, StringComparison.OrdinalIgnoreCase)))
+            {
+                preset.Name = $"{baseName} ({counter++})";
+            }
+
+            storage.SharedData.Presets.Add(preset);
+            storage.SaveSharedData();
+
+            if (preset.Name != originalName)
+                ShowNotification($"Moved '{originalName}' to shared as '{preset.Name}' (name conflict)");
+            else
+                ShowNotification($"Moved '{preset.Name}' to shared presets");
+
+            log.Info($"Moved preset to shared: {preset.Name}");
+        }
+    }
+
+    /// <summary>
+    /// Copy a shared preset to the current character.
+    /// </summary>
+    public void CopySharedPresetToCharacter(Preset sharedPreset)
+    {
+        if (currentData == null) return;
+
+        var copy = new Preset
+        {
+            Name = sharedPreset.Name,
+            Description = sharedPreset.Description,
+            Plugins = new HashSet<string>(sharedPreset.Plugins),
+            CreatedAt = DateTime.Now,
+            LastModified = DateTime.Now
+        };
+
+        AddPreset(copy);
+        ShowNotification($"Copied shared preset '{sharedPreset.Name}' to character");
+    }
+
+    #endregion
+
     #region Always-On Management
 
+    /// <summary>
+    /// Gets character-specific always-on plugins only.
+    /// </summary>
     public HashSet<string> GetAlwaysOnPlugins() => currentData?.AlwaysOn ?? new HashSet<string>();
 
+    /// <summary>
+    /// Gets shared always-on plugins only.
+    /// </summary>
+    public HashSet<string> GetSharedAlwaysOnPlugins() => storage.SharedData.AlwaysOn;
+
+    /// <summary>
+    /// Gets the effective always-on set (character + shared combined).
+    /// Used when applying presets.
+    /// </summary>
+    public HashSet<string> GetEffectiveAlwaysOnPlugins()
+    {
+        var effective = new HashSet<string>(currentData?.AlwaysOn ?? new HashSet<string>());
+        effective.UnionWith(storage.SharedData.AlwaysOn);
+        return effective;
+    }
+
     public bool IsAlwaysOn(string internalName) => currentData?.AlwaysOn.Contains(internalName) ?? false;
+
+    public bool IsSharedAlwaysOn(string internalName) => storage.SharedData.AlwaysOn.Contains(internalName);
 
     public void AddAlwaysOnPlugin(string key)
     {
@@ -210,18 +343,9 @@ public class PresetManager
         if (currentData.AlwaysOn.Add(key))
         {
             Save();
+            EnablePluginIfNeeded(key);
 
-            var internalName = GetInternalName(key);
-            var isDev = IsDevKey(key);
-            var plugin = pluginInterface.InstalledPlugins
-                .FirstOrDefault(p => p.InternalName == internalName && p.IsDev == isDev);
-
-            if (plugin != null && !plugin.IsLoaded)
-            {
-                commandManager.ProcessCommand($"/xlenableplugin \"{plugin.Name}\"");
-            }
-
-            var displayName = isDev ? $"{internalName} (Dev)" : internalName;
+            var displayName = IsDevKey(key) ? $"{GetInternalName(key)} (Dev)" : key;
             ShowNotification($"Added '{displayName}' to always-on");
             log.Info($"Added always-on: {key}");
         }
@@ -240,6 +364,43 @@ public class PresetManager
         }
     }
 
+    public void AddSharedAlwaysOnPlugin(string key)
+    {
+        if (storage.SharedData.AlwaysOn.Add(key))
+        {
+            storage.SaveSharedData();
+            EnablePluginIfNeeded(key);
+
+            var displayName = IsDevKey(key) ? $"{GetInternalName(key)} (Dev)" : key;
+            ShowNotification($"Added '{displayName}' to shared always-on");
+            log.Info($"Added shared always-on: {key}");
+        }
+    }
+
+    public void RemoveSharedAlwaysOnPlugin(string key)
+    {
+        if (storage.SharedData.AlwaysOn.Remove(key))
+        {
+            storage.SaveSharedData();
+            var displayName = IsDevKey(key) ? $"{GetInternalName(key)} (Dev)" : key;
+            ShowNotification($"Removed '{displayName}' from shared always-on");
+            log.Info($"Removed shared always-on: {key}");
+        }
+    }
+
+    private void EnablePluginIfNeeded(string key)
+    {
+        var internalName = GetInternalName(key);
+        var isDev = IsDevKey(key);
+        var plugin = pluginInterface.InstalledPlugins
+            .FirstOrDefault(p => p.InternalName == internalName && p.IsDev == isDev);
+
+        if (plugin != null && !plugin.IsLoaded)
+        {
+            commandManager.ProcessCommand($"/xlenableplugin \"{plugin.Name}\"");
+        }
+    }
+
     #endregion
 
     #region Default Preset
@@ -247,6 +408,8 @@ public class PresetManager
     public string? DefaultPreset => currentData?.DefaultPreset;
 
     public bool UseAlwaysOnAsDefault => currentData?.UseAlwaysOnAsDefault ?? false;
+
+    public bool ApplyDefaultOnLogin => currentData?.ApplyDefaultOnLogin ?? false;
 
     public void SetDefaultPreset(string? presetName)
     {
@@ -264,6 +427,14 @@ public class PresetManager
         currentData.UseAlwaysOnAsDefault = value;
         if (value)
             currentData.DefaultPreset = null;
+        Save();
+    }
+
+    public void SetApplyDefaultOnLogin(bool value)
+    {
+        if (currentData == null) return;
+
+        currentData.ApplyDefaultOnLogin = value;
         Save();
     }
 
@@ -287,7 +458,7 @@ public class PresetManager
             var installedPlugins = pluginInterface.InstalledPlugins
                 .ToDictionary(p => GetPluginKey(p), p => p);
 
-            var effectiveEnabledSet = new HashSet<string>(currentData.AlwaysOn);
+            var effectiveEnabledSet = GetEffectiveAlwaysOnPlugins();
 
             var toDisable = installedPlugins
                 .Where(kv => kv.Value.IsLoaded && !effectiveEnabledSet.Contains(kv.Key))
@@ -338,7 +509,7 @@ public class PresetManager
                 .ToDictionary(p => GetPluginKey(p), p => p);
 
             var effectiveEnabledSet = new HashSet<string>(preset.Plugins);
-            foreach (var alwaysOn in currentData.AlwaysOn)
+            foreach (var alwaysOn in GetEffectiveAlwaysOnPlugins())
             {
                 if (installedPlugins.ContainsKey(alwaysOn))
                     effectiveEnabledSet.Add(alwaysOn);
@@ -438,14 +609,14 @@ public class PresetManager
         var installedPlugins = pluginInterface.InstalledPlugins
             .ToDictionary(p => GetPluginKey(p), p => p);
 
-        var alwaysOn = currentData?.AlwaysOn ?? new HashSet<string>();
+        var effectiveAlwaysOn = GetEffectiveAlwaysOnPlugins();
         var effectiveEnabledSet = new HashSet<string>(preset.Plugins);
-        effectiveEnabledSet.UnionWith(alwaysOn);
+        effectiveEnabledSet.UnionWith(effectiveAlwaysOn);
 
         foreach (var (key, plugin) in installedPlugins)
         {
             var shouldBeEnabled = effectiveEnabledSet.Contains(key);
-            var isAlwaysOn = alwaysOn.Contains(key);
+            var isAlwaysOn = effectiveAlwaysOn.Contains(key);
 
             if (plugin.IsLoaded && !shouldBeEnabled)
             {
