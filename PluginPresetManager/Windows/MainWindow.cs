@@ -17,6 +17,7 @@ public class MainWindow : Window, IDisposable
 
     private readonly Tabs.ProfilesTab profilesTab;
     private readonly Tabs.ManageTab manageTab;
+    private readonly Tabs.WindowRescueTab windowRescueTab;
     private readonly Tabs.SettingsTab settingsTab;
     private readonly Tabs.HelpTab helpTab;
 
@@ -33,6 +34,7 @@ public class MainWindow : Window, IDisposable
 
         profilesTab = new Tabs.ProfilesTab(presetManager);
         manageTab = new Tabs.ManageTab(plugin, presetManager);
+        windowRescueTab = new Tabs.WindowRescueTab(plugin.WindowRescueHelper);
         settingsTab = new Tabs.SettingsTab(plugin, presetManager);
         helpTab = new Tabs.HelpTab();
     }
@@ -70,6 +72,15 @@ public class MainWindow : Window, IDisposable
                 {
                     ImGui.Spacing();
                     manageTab.Draw();
+                }
+            }
+
+            using (var tab = ImRaii.TabItem("Unstick"))
+            {
+                if (tab)
+                {
+                    ImGui.Spacing();
+                    windowRescueTab.Draw();
                 }
             }
 

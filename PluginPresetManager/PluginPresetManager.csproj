@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Dalamud.NET.Sdk/14.0.1">
   <PropertyGroup>
-    <Version>1.0.1.0</Version>
+    <Version>1.0.2.0</Version>
     <Description>A plugin preset manager with always-on plugin support and cross-character sharing.</Description>
     <PackageProjectUrl>https://github.com/Brappp/PluginPresetManager</PackageProjectUrl>
     <IsPackable>false</IsPackable>

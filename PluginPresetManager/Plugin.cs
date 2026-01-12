@@ -35,6 +35,7 @@ public sealed class Plugin : IDalamudPlugin
     public Configuration Configuration { get; init; }
     public CharacterStorage CharacterStorage { get; init; }
     public PresetManager PresetManager { get; init; }
+    public WindowRescueHelper WindowRescueHelper { get; init; }
 
     public readonly WindowSystem WindowSystem = new("PluginPresetManager");
     private MainWindow MainWindow { get; init; }
@@ -59,6 +60,8 @@ public sealed class Plugin : IDalamudPlugin
             Log,
             Configuration,
             CharacterStorage);
+
+        WindowRescueHelper = new WindowRescueHelper(Log);
 
         ClientState.Login += OnLogin;
         ClientState.Logout += OnLogout;

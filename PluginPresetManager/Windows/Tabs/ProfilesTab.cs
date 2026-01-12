@@ -18,6 +18,12 @@ public class ProfilesTab
 
     public void Draw()
     {
+        if (!presetManager.HasCharacter)
+        {
+            ImGui.TextColored(Colors.Warning, "Please log in to a character to use presets.");
+            return;
+        }
+
         var data = presetManager.CurrentData;
         var presets = presetManager.GetAllPresets();
         var sharedPresets = presetManager.GetSharedPresets();
