@@ -102,7 +102,7 @@ public sealed class Plugin : IDalamudPlugin
 
         CommandManager.AddHandler(CommandNameShort, new CommandInfo(OnCommandShort)
         {
-            HelpMessage = "Apply a preset by name or 'alwayson' to disable all except always-on. Usage: /ppm <preset name|alwayson>"
+            HelpMessage = "Apply a preset by name, 'alwayson' to disable all except always-on, or 'rescueall' to rescue off-screen windows. Usage: /ppm <preset name|alwayson|rescueall>"
         });
 
         PluginInterface.UiBuilder.Draw += WindowSystem.Draw;
@@ -239,6 +239,18 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
+        if (argument.Equals("rescueall", StringComparison.OrdinalIgnoreCase))
+        {
+            var count = WindowRescueHelper.RescueAllOffScreen();
+            NotificationManager.AddNotification(new Notification
+            {
+                Content = count > 0 ? $"Rescued {count} off-screen window(s)" : "No off-screen windows found",
+                Type = count > 0 ? NotificationType.Success : NotificationType.Info,
+                Title = "Window Rescue"
+            });
+            return;
+        }
+
         var preset = PresetManager.GetPresetByName(argument);
 
         if (preset != null)
@@ -265,12 +277,14 @@ public sealed class Plugin : IDalamudPlugin
                 }
                 ChatGui.Print("[Preset] Special commands:");
                 ChatGui.Print("  - alwayson (disable everything except always-on plugins)");
+                ChatGui.Print("  - rescueall (rescue all off-screen windows)");
             }
             else
             {
                 ChatGui.Print("[Preset] No presets available. Use /ppreset to create one.");
                 ChatGui.Print("[Preset] Special commands:");
                 ChatGui.Print("  - alwayson (disable everything except always-on plugins)");
+                ChatGui.Print("  - rescueall (rescue all off-screen windows)");
             }
         }
     }

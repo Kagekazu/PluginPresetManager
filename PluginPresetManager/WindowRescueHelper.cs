@@ -70,7 +70,7 @@ public class WindowRescueHelper
             for (var i = 0; i < windowList.Size; i++)
             {
                 var window = windowList[i];
-                if (window.Handle == null || !window.Active || window.Hidden)
+                if (window.Handle == null || window.Hidden)
                     continue;
 
                 var namePtr = window.Name;
@@ -115,6 +115,24 @@ public class WindowRescueHelper
         }
 
         return windows;
+    }
+
+    /// <summary>
+    /// Rescues all off-screen windows by moving them to the center.
+    /// </summary>
+    /// <returns>The number of windows rescued.</returns>
+    public int RescueAllOffScreen()
+    {
+        var windows = GetAllWindows();
+        var offScreenWindows = windows.Where(w => w.IsOffScreen || w.IsPartiallyOffScreen).ToList();
+
+        foreach (var window in offScreenWindows)
+        {
+            MoveWindowToCenter(window.Name);
+        }
+
+        log.Info($"Rescued {offScreenWindows.Count} off-screen windows");
+        return offScreenWindows.Count;
     }
 
     /// <summary>

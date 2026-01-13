@@ -146,6 +146,11 @@ public class DtrPopupWindow : Window
         ImGui.Separator();
         ImGui.Spacing();
 
+        if (DrawMenuItem("Rescue Windows", false))
+        {
+            plugin.WindowRescueHelper.RescueAllOffScreen();
+        }
+
         if (DrawMenuItem("Open Manager...", false))
         {
             plugin.ToggleMainUi();
